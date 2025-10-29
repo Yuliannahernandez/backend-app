@@ -421,30 +421,50 @@ export class AuthService {
 
   // ==================== RECUPERAR CONTRASEÑA ====================
   async forgotPassword(forgotPasswordDto: ForgotPasswordDto) {
-    const { correo } = forgotPasswordDto;
+  const { correo } = forgotPasswordDto;
 
-    const usuario = await this.usuarioRepository.findOne({ where: { correo } });
-    if (!usuario) {
-      return {
-        message: 'Si el correo existe, se enviará un enlace de recuperación',
-      };
-    }
+  const usuario = await this.usuarioRepository.findOne({ 
+    where: { correo },
+    relations: ['cliente'],
+  });
 
-    const token = crypto.randomBytes(32).toString('hex');
-    const expiracion = new Date();
-    expiracion.setHours(expiracion.getHours() + 1);
-
-    usuario.tokenRecuperacion = token;
-    usuario.tokenExpiracion = expiracion;
-    await this.usuarioRepository.save(usuario);
-
-    console.log(`Token de recuperación para ${correo}: ${token}`);
-
+  if (!usuario) {
     return {
       message: 'Si el correo existe, se enviará un enlace de recuperación',
-      ...(process.env.NODE_ENV === 'development' && { token }),
     };
   }
+
+  const token = crypto.randomBytes(32).toString('hex');
+  const expiracion = new Date();
+  expiracion.setHours(expiracion.getHours() + 1);
+
+  usuario.tokenRecuperacion = token;
+  usuario.tokenExpiracion = expiracion;
+  await this.usuarioRepository.save(usuario);
+
+  console.log(`✅ Token generado: ${token}`);
+  
+  // ✅ ESTA ES LA PARTE IMPORTANTE QUE FALTA
+  try {
+    console.log('📤 Intentando enviar email...');
+    await this.emailService.sendPasswordResetEmail(
+      correo, 
+      token, 
+      usuario.cliente?.nombre || 'Usuario'
+    );
+    console.log('✅ Email enviado!');
+  } catch (error) {
+    console.error('❌ Error:', error.message);
+  }
+
+  return {
+    message: 'Si el correo existe, se enviará un enlace de recuperación',
+    ...(process.env.NODE_ENV === 'development' && { 
+      token,
+      resetUrl: `${this.configService.get('FRONTEND_URL')}/reset-password?token=${token}`,
+    }),
+  };
+}
 
   async resetPassword(resetPasswordDto: ResetPasswordDto) {
     const { token, nuevaPassword } = resetPasswordDto;
@@ -531,4 +551,62 @@ export class AuthService {
     throw new UnauthorizedException('Token de Google inválido: ' + error.message);
   }
 }
+// ==================== BUSCAR CUENTA POR DATOS ====================
+async findAccount(searchType: string, searchData: any) {
+  let usuario;
+
+  if (searchType === 'phone') {
+    // Buscar por teléfono
+    const cliente = await this.clienteRepository.findOne({
+      where: { telefono: searchData.telefono },
+      relations: ['usuario'],
+    });
+    
+    if (cliente && cliente.usuario) {
+      usuario = cliente.usuario;
+    }
+  } else if (searchType === 'name') {
+    // Buscar por nombre y apellido
+    const cliente = await this.clienteRepository.findOne({
+      where: { 
+        nombre: searchData.nombre,
+        apellido: searchData.apellido,
+      },
+      relations: ['usuario'],
+    });
+    
+    if (cliente && cliente.usuario) {
+      usuario = cliente.usuario;
+    }
+  }
+
+  if (!usuario) {
+    return {
+      found: false,
+      message: 'No se encontró ninguna cuenta con esa información',
+    };
+  }
+
+  // Ocultar parte del correo por seguridad
+  const correoOculto = this.maskEmail(usuario.correo);
+
+  return {
+    found: true,
+    correo: correoOculto,
+    // Solo mostrar correo completo si ya pasó verificación de seguridad
+    fullEmail: usuario.correo,
+    message: 'Cuenta encontrada',
+  };
 }
+
+// Helper para ocultar email
+private maskEmail(email: string): string {
+  const [localPart, domain] = email.split('@');
+  const visibleChars = Math.min(3, Math.floor(localPart.length / 2));
+  const maskedLocal = 
+    localPart.substring(0, visibleChars) + 
+    '*'.repeat(localPart.length - visibleChars);
+  return `${maskedLocal}@${domain}`;
+}
+}
+

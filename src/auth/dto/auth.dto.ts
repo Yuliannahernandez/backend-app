@@ -1,4 +1,4 @@
-import { IsEmail, IsNotEmpty, IsString, MinLength, IsOptional, IsNumber } from 'class-validator';
+import { IsEmail, IsNotEmpty, IsString, Matches, MinLength, IsOptional, IsNumber } from 'class-validator';
 
 export class RegisterDto {
   @IsEmail()
@@ -6,8 +6,10 @@ export class RegisterDto {
   correo: string;
 
   @IsString()
-  @MinLength(6)
-  @IsNotEmpty()
+  @MinLength(8, { message: 'La contraseña debe tener al menos 8 caracteres' })
+  @Matches(/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[!@#$%^&*(),.?":{}|<>])[A-Za-z\d!@#$%^&*(),.?":{}|<>]{8,}$/, {
+    message: 'La contraseña debe contener al menos una mayúscula, una minúscula, un número y un carácter especial (!@#$%^&*)',
+  })
   password: string;
 
   @IsString()
@@ -57,9 +59,11 @@ export class ResetPasswordDto {
   @IsNotEmpty()
   token: string;
 
-  @IsString()
-  @MinLength(6)
-  @IsNotEmpty()
+@IsString()
+  @MinLength(8, { message: 'La contraseña debe tener al menos 8 caracteres' })
+  @Matches(/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[!@#$%^&*(),.?":{}|<>])[A-Za-z\d!@#$%^&*(),.?":{}|<>]{8,}$/, {
+    message: 'La contraseña debe contener al menos una mayúscula, una minúscula, un número y un carácter especial (!@#$%^&*)',
+  })
   nuevaPassword: string;
 }
 

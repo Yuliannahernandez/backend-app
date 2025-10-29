@@ -99,6 +99,14 @@ export class AuthController {
     return this.authService.resetPassword(resetPasswordDto);
   }
 
+  @Post('find-account')
+async findAccount(
+  @Body('searchType') searchType: string,
+  @Body('searchData') searchData: any,
+) {
+  return this.authService.findAccount(searchType, searchData);
+}
+
   // ==================== PERFIL Y VERIFICACIÓN ====================
   @UseGuards(JwtAuthGuard)
   @Get('profile')
