@@ -10,6 +10,8 @@ import { Cliente } from '../entities/cliente.entity';
 import { JwtStrategy } from './strategies/jwt.strategy';
 import { GoogleStrategy } from '../strategies/google.strategy';
 import { EmailModule } from '../common/services/email.module';
+import { AuditoriaModule } from '../auditoria/auditoria.module'; // ← AGREGAR ESTA LÍNEA
+
 @Module({
   imports: [
     TypeOrmModule.forFeature([Usuario, Cliente]),
@@ -25,9 +27,10 @@ import { EmailModule } from '../common/services/email.module';
       inject: [ConfigService],
     }),
     EmailModule,
+    AuditoriaModule, 
   ],
   controllers: [AuthController],
-  providers: [AuthService, JwtStrategy, GoogleStrategy, EmailModule],
+  providers: [AuthService, JwtStrategy, GoogleStrategy], // ← Quité EmailModule de aquí (no debe estar en providers)
   exports: [AuthService],
 })
 export class AuthModule {}

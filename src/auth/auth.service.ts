@@ -12,7 +12,8 @@ import { Cliente } from '../entities/cliente.entity';
 import { RegisterDto, LoginDto, ForgotPasswordDto, ResetPasswordDto } from './dto/auth.dto';
 import { OAuth2Client } from 'google-auth-library';
 import { EmailService } from '../common/services/email.service';
-
+import { AuditoriaService } from '../auditoria/auditoria.service';
+import { AccionAuditoria } from '../entities/auditoria.entity';
 @Injectable()
 export class AuthService {
   private googleClient: OAuth2Client;
@@ -25,6 +26,7 @@ export class AuthService {
     private jwtService: JwtService,
     private configService: ConfigService,
     private emailService: EmailService,
+    private auditoriaService: AuditoriaService,
   ) {
     this.googleClient = new OAuth2Client(
       this.configService.get('GOOGLE_CLIENT_ID')
@@ -173,78 +175,105 @@ export class AuthService {
     };
   }
 
-  // ==================== LOGIN TRADICIONAL (CON VERIFICACIÓN) ====================
-  async login(loginDto: LoginDto) {
-    const { correo, password, twoFACode } = loginDto;
+// ==================== LOGIN TRADICIONAL (CON AUDITORÍA) ====================
+async login(loginDto: LoginDto) {
+  const { correo, password, twoFACode } = loginDto;
 
-    const usuario = await this.usuarioRepository.findOne({
-      where: { correo },
-      relations: ['cliente'],
-    });
+  const usuario = await this.usuarioRepository.findOne({
+    where: { correo },
+    relations: ['cliente'],
+  });
 
-    if (!usuario || usuario.isGoogleAuth) {
-      throw new UnauthorizedException('Credenciales inválidas');
+  if (!usuario || usuario.isGoogleAuth) {
+    throw new UnauthorizedException('Credenciales inválidas');
+  }
+
+  const isPasswordValid = await bcrypt.compare(password, usuario.passwordHash);
+  if (!isPasswordValid) {
+    
+    try {
+      await this.auditoriaService.create({
+        usuarioId: 0, // Usuario no identificado
+        tabla: 'usuarios',
+        accion: AccionAuditoria.SELECT,
+        registroId: 0,
+        datosNuevos: { correo, resultado: 'Credenciales inválidas' },
+        ipAddress: undefined,
+        descripcion: `Intento de login fallido: ${correo}`,
+        endpoint: '/auth/login',
+        metodo: 'POST',
+      });
+    } catch (error) {
+      console.error('Error auditando intento fallido:', error);
     }
+    throw new UnauthorizedException('Credenciales inválidas');
+  }
 
-    const isPasswordValid = await bcrypt.compare(password, usuario.passwordHash);
-    if (!isPasswordValid) {
-      throw new UnauthorizedException('Credenciales inválidas');
-    }
+  if (usuario.estado !== 'activo') {
+    throw new UnauthorizedException('Cuenta inactiva o suspendida');
+  }
 
-    if (usuario.estado !== 'activo') {
-      throw new UnauthorizedException('Cuenta inactiva o suspendida');
-    }
+  if (!usuario.emailVerified) {
+    return {
+      requiresVerification: true,
+      message: 'Por favor verifica tu correo electrónico antes de iniciar sesión',
+      correo: usuario.correo,
+    };
+  }
 
-    // ==================== VERIFICAR SI EL EMAIL ESTÁ VERIFICADO ====================
-    if (!usuario.emailVerified) {
+  if (usuario.is2FAEnabled) {
+    if (!twoFACode) {
       return {
-        requiresVerification: true,
-        message: 'Por favor verifica tu correo electrónico antes de iniciar sesión',
-        correo: usuario.correo,
+        requires2FA: true,
+        message: 'Se requiere código 2FA',
       };
     }
 
-    // Verificar 2FA si está habilitado
-    if (usuario.is2FAEnabled) {
-      if (!twoFACode) {
-        return {
-          requires2FA: true,
-          message: 'Se requiere código 2FA',
-        };
-      }
+    const isValid = speakeasy.totp.verify({
+      secret: usuario.twoFASecret,
+      encoding: 'base32',
+      token: twoFACode,
+      window: 2,
+    });
 
-      const isValid = speakeasy.totp.verify({
-        secret: usuario.twoFASecret,
-        encoding: 'base32',
-        token: twoFACode,
-        window: 2,
-      });
-
-      if (!isValid) {
-        throw new UnauthorizedException('Código 2FA inválido');
-      }
+    if (!isValid) {
+      throw new UnauthorizedException('Código 2FA inválido');
     }
-
-    usuario.ultimoAcceso = new Date();
-    await this.usuarioRepository.save(usuario);
-
-    const token = this.generateToken(usuario);
-
-    return {
-      message: 'Inicio de sesión exitoso',
-      token,
-      user: {
-        id: usuario.id,
-        correo: usuario.correo,
-        rol: usuario.rol,
-        nombre: usuario.cliente?.nombre,
-        apellido: usuario.cliente?.apellido,
-        puntosLealtad: usuario.cliente?.puntosLealtad,
-        emailVerified: usuario.emailVerified,
-        is2FAEnabled: usuario.is2FAEnabled,
-      },
-    };
   }
+
+  usuario.ultimoAcceso = new Date();
+  await this.usuarioRepository.save(usuario);
+
+  // AUDITAR LOGIN EXITOSO
+  try {
+    await this.auditoriaService.logSelect(
+      usuario.id,
+      'usuarios',
+      undefined,
+      '/auth/login',
+      `Login exitoso: ${correo}`,
+    );
+  } catch (error) {
+    console.error('Error auditando login:', error);
+  }
+
+  const token = this.generateToken(usuario);
+
+  return {
+    message: 'Inicio de sesión exitoso',
+    token,
+    user: {
+      id: usuario.id,
+      correo: usuario.correo,
+      rol: usuario.rol,
+      nombre: usuario.cliente?.nombre,
+      apellido: usuario.cliente?.apellido,
+      puntosLealtad: usuario.cliente?.puntosLealtad,
+      emailVerified: usuario.emailVerified,
+      is2FAEnabled: usuario.is2FAEnabled,
+    },
+  };
+}
   // ==================== GOOGLE OAUTH ====================
   async googleLogin(googleUser: any) {
     const { googleId, email, firstName, lastName } = googleUser;

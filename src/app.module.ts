@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import { APP_INTERCEPTOR } from '@nestjs/core';
 import { AuthModule } from './auth/auth.module';
 import { ProfileModule } from './profile/profile.module'; 
 import { ProductosModule } from './productos/productos.module';
@@ -13,6 +14,9 @@ import { CuponesModule } from './cupones/cupones.module';
 import { GerenteModule } from './gerente/gerente.module';
 import { LealtadModule } from './lealtad/lealtad.module';
 import { ClientesModule } from './clientes/clientes.module';
+import { AuditoriaModule } from './auditoria/auditoria.module';
+import { AuditoriaInterceptor } from './common/interceptors/auditoria.interceptor'; 
+
 @Module({ 
   imports: [
     // Configuración de variables de entorno
@@ -46,6 +50,14 @@ import { ClientesModule } from './clientes/clientes.module';
     CuponesModule,
     ClientesModule,
     GerenteModule,
+    AuditoriaModule,
+  ],
+  providers: [
+    // Interceptor de auditoría global
+    {
+      provide: APP_INTERCEPTOR,
+      useClass: AuditoriaInterceptor,
+    },
   ],
 })
 export class AppModule {}

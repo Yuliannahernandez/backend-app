@@ -7,10 +7,12 @@ import { PedidoDetalle } from '../entities/pedido-detalle.entity';
 import { Cliente } from '../entities/cliente.entity';
 import { Producto } from '../entities/producto.entity';
 import { Sucursal } from '../entities/sucursal.entity';
+import { AuditoriaModule } from '../auditoria/auditoria.module';
 
 @Module({
   imports: [
     TypeOrmModule.forFeature([Pedido, PedidoDetalle, Cliente, Producto, Sucursal]),
+    AuditoriaModule, // Módulo de auditoría
   ],
   controllers: [CarritoController],
   providers: [CarritoService],
