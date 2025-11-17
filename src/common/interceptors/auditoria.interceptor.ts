@@ -10,7 +10,7 @@ import { AuditoriaService } from '../../auditoria/auditoria.service';
 import { AccionAuditoria } from '../../entities/auditoria.entity';
 import { Reflector } from '@nestjs/core';
 
-// Decorador para marcar endpoints que requieren auditoría
+
 export const AUDITORIA_KEY = 'auditoria';
 export interface AuditoriaMetadata {
   tabla: string;
@@ -35,20 +35,20 @@ export class AuditoriaInterceptor implements NestInterceptor {
       context.getHandler(),
     );
 
-    console.log('🔍 === INTERCEPTOR EJECUTADO ===');
-    console.log('📋 Metadata:', metadata);
-    console.log('🌐 Endpoint:', request.url);
-    console.log('🔧 Método:', request.method);
+    console.log(' === INTERCEPTOR EJECUTADO ===');
+    console.log(' Metadata:', metadata);
+    console.log(' Endpoint:', request.url);
+    console.log(' Método:', request.method);
 
     // Si no hay metadata de auditoría, continuar sin auditar
     if (!metadata) {
-      console.log('⚠️ No hay metadata de auditoría - saliendo');
+      console.log(' No hay metadata de auditoría - saliendo');
       return next.handle();
     }
 
     const usuario = request.user;
-    console.log('👤 Usuario completo:', usuario);
-    console.log('🆔 Usuario.sub:', usuario?.sub);
+    console.log(' Usuario completo:', usuario);
+    console.log(' Usuario.sub:', usuario?.sub);
     
     const ipAddress = this.getClientIp(request);
     const endpoint = request.url;
@@ -80,20 +80,20 @@ export class AuditoriaInterceptor implements NestInterceptor {
 
     return next.handle().pipe(
       tap(async (response) => {
-        console.log('📤 Respuesta recibida:', response);
+        console.log(' Respuesta recibida:', response);
         
         // Solo auditar si hay usuario autenticado
         if (!usuario || !usuario.sub) {
-          console.log('❌ No hay usuario autenticado - no se auditará');
+          console.log(' No hay usuario autenticado - no se auditará');
           return;
         }
 
-        console.log('✅ Usuario autenticado - procediendo a auditar');
+        console.log(' Usuario autenticado - procediendo a auditar');
 
         try {
           // Auditar SELECT (GET)
           if (accion === AccionAuditoria.SELECT) {
-            console.log('📖 Auditando SELECT...');
+            console.log(' Auditando SELECT...');
             await this.auditoriaService.logSelect(
               usuario.sub,
               metadata.tabla,
@@ -101,14 +101,14 @@ export class AuditoriaInterceptor implements NestInterceptor {
               endpoint,
               metadata.descripcion,
             );
-            console.log('✅ SELECT auditado correctamente');
+            console.log(' SELECT auditado correctamente');
             return;
           }
 
           // Auditar INSERT (POST)
           if (accion === AccionAuditoria.INSERT && response) {
             const registroId = response.id || response.data?.id;
-            console.log('➕ Auditando INSERT - registroId:', registroId);
+            console.log(' Auditando INSERT - registroId:', registroId);
             if (registroId) {
               await this.auditoriaService.logInsert(
                 usuario.sub,
@@ -118,9 +118,9 @@ export class AuditoriaInterceptor implements NestInterceptor {
                 ipAddress,
                 endpoint,
               );
-              console.log('✅ INSERT auditado correctamente');
+              console.log(' INSERT auditado correctamente');
             } else {
-              console.log('⚠️ No se encontró registroId en la respuesta');
+              console.log(' No se encontró registroId en la respuesta');
             }
             return;
           }
@@ -129,20 +129,20 @@ export class AuditoriaInterceptor implements NestInterceptor {
           if (accion === AccionAuditoria.UPDATE && response) {
             const registroId =
               request.params.id || response.id || response.data?.id;
-            console.log('✏️ Auditando UPDATE - registroId:', registroId);
+            console.log(' Auditando UPDATE - registroId:', registroId);
             if (registroId) {
               await this.auditoriaService.logUpdate(
                 usuario.sub,
                 metadata.tabla,
                 registroId,
-                request.body, // Datos anteriores (aproximado)
+                request.body, 
                 response,
                 ipAddress,
                 endpoint,
               );
-              console.log('✅ UPDATE auditado correctamente');
+              console.log(' UPDATE auditado correctamente');
             } else {
-              console.log('⚠️ No se encontró registroId para UPDATE');
+              console.log(' No se encontró registroId para UPDATE');
             }
             return;
           }
@@ -150,7 +150,7 @@ export class AuditoriaInterceptor implements NestInterceptor {
           // Auditar DELETE
           if (accion === AccionAuditoria.DELETE) {
             const registroId = request.params.id;
-            console.log('🗑️ Auditando DELETE - registroId:', registroId);
+            console.log(' Auditando DELETE - registroId:', registroId);
             if (registroId) {
               await this.auditoriaService.logDelete(
                 usuario.sub,
@@ -160,14 +160,14 @@ export class AuditoriaInterceptor implements NestInterceptor {
                 ipAddress,
                 endpoint,
               );
-              console.log('✅ DELETE auditado correctamente');
+              console.log(' DELETE auditado correctamente');
             } else {
-              console.log('⚠️ No se encontró registroId para DELETE');
+              console.log(' No se encontró registroId para DELETE');
             }
             return;
           }
         } catch (error) {
-          console.error('❌ Error en auditoría:', error);
+          console.error(' Error en auditoría:', error);
           console.error('Stack trace:', error.stack);
           // No lanzar error para no interrumpir la operación principal
         }

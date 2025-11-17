@@ -26,7 +26,7 @@ class CambiarTipoEntregaDto {
 
 @Controller('carrito')
 @UseGuards(JwtAuthGuard)
-// Aplicar interceptor a todo el controlador
+
 export class CarritoController {
   constructor(private readonly carritoService: CarritoService) {}
 

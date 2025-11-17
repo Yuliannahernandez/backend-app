@@ -1,344 +1,214 @@
 import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
-import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
-import { Cliente } from '../entities/cliente.entity';
-import { Direccion } from '../entities/direccion.entity';
-import { MetodoPago } from '../entities/metodopago.entity';
-import { CondicionSalud } from '../entities/condicionsalud.entity';
+import { ConfigService } from '@nestjs/config';
+import axios, { AxiosInstance } from 'axios';
 import { UpdateProfileDto, CreateDireccionDto, CreateMetodoPagoDto, AddCondicionSaludDto } from '../auth/dto/profile.dto';
 
 @Injectable()
 export class ProfileService {
-  constructor(
-    @InjectRepository(Cliente)
-    private clienteRepository: Repository<Cliente>,
-    @InjectRepository(Direccion)
-    private direccionRepository: Repository<Direccion>,
-    @InjectRepository(MetodoPago)
-    private metodoPagoRepository: Repository<MetodoPago>,
-    @InjectRepository(CondicionSalud)
-    private condicionSaludRepository: Repository<CondicionSalud>,
-  ) {}
+  private apiClient: AxiosInstance;
+
+  constructor(private configService: ConfigService) {
+    this.apiClient = axios.create({
+      baseURL: this.configService.get('PYTHON_API_URL') || 'http://localhost:8000',
+      timeout: 10000,
+      headers: {
+        'Content-Type': 'application/json',
+      },
+    });
+  }
 
   // ============ PERFIL ============
   async getProfile(usuarioId: number) {
-    const cliente = await this.clienteRepository.findOne({
-      where: { usuarioId },
-      relations: ['usuario'],
-    });
-
-    if (!cliente) {
-      throw new NotFoundException('Perfil no encontrado');
+    try {
+      const response = await this.apiClient.get(`/profile/${usuarioId}`);
+      return response.data;
+    } catch (error) {
+      if (error.response?.status === 404) {
+        throw new NotFoundException('Perfil no encontrado');
+      }
+      throw error;
     }
-
-    return {
-      id: cliente.id,
-      nombre: cliente.nombre,
-      apellido: cliente.apellido,
-      edad: cliente.edad,
-      telefono: cliente.telefono,
-      correo: cliente.usuario.correo,
-      idioma: cliente.idioma,
-      puntosLealtad: cliente.puntosLealtad,
-      fotoPerfil: cliente.fotoPerfil,
-      fechaNacimiento: cliente.fechaNacimiento,
-    };
   }
 
   async updateProfile(usuarioId: number, updateData: UpdateProfileDto) {
-    const cliente = await this.clienteRepository.findOne({
-      where: { usuarioId },
-    });
-
-    if (!cliente) {
-      throw new NotFoundException('Perfil no encontrado');
+    try {
+      const response = await this.apiClient.put(`/profile/${usuarioId}`, updateData);
+      return response.data;
+    } catch (error) {
+      if (error.response?.status === 404) {
+        throw new NotFoundException('Perfil no encontrado');
+      }
+      throw error;
     }
-
-    Object.assign(cliente, updateData);
-    await this.clienteRepository.save(cliente);
-
-    return {
-      message: 'Perfil actualizado exitosamente',
-      data: cliente,
-    };
   }
 
   async updateFotoPerfil(usuarioId: number, file: Express.Multer.File) {
-  const cliente = await this.clienteRepository.findOne({ where: { usuarioId } });
-  if (!cliente) throw new NotFoundException('Cliente no encontrado');
+    try {
+      const imageUrl = file.filename;
+      
+      const response = await this.apiClient.put(`/profile/${usuarioId}/foto`, {
+        fotoPerfil: imageUrl,
+      });
 
-  // Aquí guardas la ruta o URL donde almacenas la imagen
-  const imageUrl = file.filename;
-  cliente.fotoPerfil = imageUrl;
-
-  await this.clienteRepository.save(cliente);
-
-  return {
-    message: 'Foto actualizada correctamente',
-    fotoPerfil: imageUrl,
-  };
-}
-
+      return {
+        message: 'Foto actualizada correctamente',
+        fotoPerfil: imageUrl,
+      };
+    } catch (error) {
+      if (error.response?.status === 404) {
+        throw new NotFoundException('Cliente no encontrado');
+      }
+      throw error;
+    }
+  }
 
   // ============ DIRECCIONES ============
   async getDirecciones(usuarioId: number) {
-    const cliente = await this.clienteRepository.findOne({
-      where: { usuarioId },
-    });
-
-    if (!cliente) {
-      throw new NotFoundException('Cliente no encontrado');
+    try {
+      const response = await this.apiClient.get(`/profile/${usuarioId}/direcciones`);
+      return response.data;
+    } catch (error) {
+      if (error.response?.status === 404) {
+        return [];
+      }
+      throw error;
     }
-
-    return this.direccionRepository.find({
-      where: { clienteId: cliente.id, activa: true },
-      order: { esPrincipal: 'DESC', fechaCreacion: 'DESC' },
-    });
   }
 
   async createDireccion(usuarioId: number, createData: CreateDireccionDto) {
-    const cliente = await this.clienteRepository.findOne({
-      where: { usuarioId },
-    });
-
-    if (!cliente) {
+  try {
+   
+    const response = await this.apiClient.post(
+      `/profile/${usuarioId}/direcciones`, 
+      createData  
+    );
+    return response.data;
+  } catch (error) {
+    console.error('Error de Python:', error.response?.data);
+    if (error.response?.status === 404) {
       throw new NotFoundException('Cliente no encontrado');
     }
-
-    // Si es dirección principal, desmarcar las demás
-    if (createData.esPrincipal) {
-      await this.direccionRepository.update(
-        { clienteId: cliente.id },
-        { esPrincipal: false },
-      );
-    }
-
-    const direccion = this.direccionRepository.create({
-      ...createData,
-      clienteId: cliente.id,
-    });
-
-    await this.direccionRepository.save(direccion);
-
-    return {
-      message: 'Dirección agregada exitosamente',
-      data: direccion,
-    };
+    throw error;
   }
+}
 
   async updateDireccion(usuarioId: number, direccionId: number, updateData: CreateDireccionDto) {
-    const cliente = await this.clienteRepository.findOne({
-      where: { usuarioId },
-    });
-
-    if (!cliente) {
-      throw new NotFoundException('Cliente no encontrado');
-    }
-
-    const direccion = await this.direccionRepository.findOne({
-      where: { id: direccionId, clienteId: cliente.id },
-    });
-
-    if (!direccion) {
-      throw new NotFoundException('Dirección no encontrada');
-    }
-
-    // Si se marca como principal, desmarcar las demás
-    if (updateData.esPrincipal) {
-      await this.direccionRepository.update(
-        { clienteId: cliente.id },
-        { esPrincipal: false },
+    try {
+      const response = await this.apiClient.put(
+        `/profile/${usuarioId}/direcciones/${direccionId}`,
+        updateData
       );
+      return response.data;
+    } catch (error) {
+      if (error.response?.status === 404) {
+        throw new NotFoundException('Dirección no encontrada');
+      }
+      throw error;
     }
-
-    Object.assign(direccion, updateData);
-    await this.direccionRepository.save(direccion);
-
-    return {
-      message: 'Dirección actualizada exitosamente',
-      data: direccion,
-    };
   }
 
   async deleteDireccion(usuarioId: number, direccionId: number) {
-    const cliente = await this.clienteRepository.findOne({
-      where: { usuarioId },
-    });
-
-    if (!cliente) {
-      throw new NotFoundException('Cliente no encontrado');
+    try {
+      const response = await this.apiClient.delete(`/profile/${usuarioId}/direcciones/${direccionId}`);
+      return response.data;
+    } catch (error) {
+      if (error.response?.status === 404) {
+        throw new NotFoundException('Dirección no encontrada');
+      }
+      throw error;
     }
-
-    const result = await this.direccionRepository.update(
-      { id: direccionId, clienteId: cliente.id },
-      { activa: false },
-    );
-
-    if (result.affected === 0) {
-      throw new NotFoundException('Dirección no encontrada');
-    }
-
-    return {
-      message: 'Dirección eliminada exitosamente',
-    };
   }
 
   // ============ MÉTODOS DE PAGO ============
-async getMetodosPago(usuarioId: number) {
-  const cliente = await this.clienteRepository.findOne({
-    where: { usuarioId },
-  });
-
-  if (!cliente) {
-    throw new NotFoundException('Cliente no encontrado');
+  async getMetodosPago(usuarioId: number) {
+    try {
+      const response = await this.apiClient.get(`/profile/${usuarioId}/metodos-pago`);
+      return response.data;
+    } catch (error) {
+      if (error.response?.status === 404) {
+        return [];
+      }
+      throw error;
+    }
   }
 
-  return this.metodoPagoRepository.find({
-    where: { clienteId: cliente.id, activo: true },
-    order: { esPrincipal: 'DESC', fechaCreacion: 'DESC' },
-  });
-}
-
-async createMetodoPago(usuarioId: number, createData: CreateMetodoPagoDto) {
-  const cliente = await this.clienteRepository.findOne({
-    where: { usuarioId },
-  });
-
-  if (!cliente) {
-    throw new NotFoundException('Cliente no encontrado');
+  async createMetodoPago(usuarioId: number, createData: CreateMetodoPagoDto) {
+    try {
+      const response = await this.apiClient.post(`/profile/${usuarioId}/metodos-pago`, createData);
+      return response.data;
+    } catch (error) {
+      if (error.response?.status === 404) {
+        throw new NotFoundException('Cliente no encontrado');
+      }
+      throw error;
+    }
   }
 
-  // Si es método principal, desmarcar los demás
-  if (createData.esPrincipal) {
-    await this.metodoPagoRepository.update(
-      { clienteId: cliente.id },
-      { esPrincipal: false },
-    );
+  async updateMetodoPago(usuarioId: number, metodoPagoId: number, updateData: CreateMetodoPagoDto) {
+    try {
+      const response = await this.apiClient.put(
+        `/profile/${usuarioId}/metodos-pago/${metodoPagoId}`,
+        updateData
+      );
+      return response.data;
+    } catch (error) {
+      if (error.response?.status === 404) {
+        throw new NotFoundException('Método de pago no encontrado');
+      }
+      throw error;
+    }
   }
-
-  const metodoPago = this.metodoPagoRepository.create({
-    ...createData,
-    clienteId: cliente.id,
-  });
-
-  await this.metodoPagoRepository.save(metodoPago);
-
-  return {
-    message: 'Método de pago agregado exitosamente',
-    data: metodoPago,
-  };
-}
-
-async updateMetodoPago(usuarioId: number, metodoPagoId: number, updateData: CreateMetodoPagoDto) {
-  const cliente = await this.clienteRepository.findOne({
-    where: { usuarioId },
-  });
-
-  if (!cliente) {
-    throw new NotFoundException('Cliente no encontrado');
-  }
-
-  const metodoPago = await this.metodoPagoRepository.findOne({
-    where: { id: metodoPagoId, clienteId: cliente.id, activo: true },
-  });
-
-  if (!metodoPago) {
-    throw new NotFoundException('Método de pago no encontrado');
-  }
-
-  // Si se marca como principal, desmarcar los demás
-  if (updateData.esPrincipal) {
-    await this.metodoPagoRepository.update(
-      { clienteId: cliente.id },
-      { esPrincipal: false },
-    );
-  }
-
-  Object.assign(metodoPago, updateData);
-  await this.metodoPagoRepository.save(metodoPago);
-
-  return {
-    message: 'Método de pago actualizado exitosamente',
-    data: metodoPago,
-  };
-}
 
   async deleteMetodoPago(usuarioId: number, metodoPagoId: number) {
-    const cliente = await this.clienteRepository.findOne({
-      where: { usuarioId },
-    });
-
-    if (!cliente) {
-      throw new NotFoundException('Cliente no encontrado');
-    }
-
-    const result = await this.metodoPagoRepository.update(
-      { id: metodoPagoId, clienteId: cliente.id },
-      { activo: false },
-    );
-
-    if (result.affected === 0) {
-      throw new NotFoundException('Método de pago no encontrado');
-    }
-
-    return {
-      message: 'Método de pago eliminado exitosamente',
-    };
-  }
-
-  // ============ CONDICIONES DE SALUD ============
-  async getCondicionesSalud() {
-    return this.condicionSaludRepository.find();
-  }
-
-  async getClienteCondiciones(usuarioId: number) {
-    const cliente = await this.clienteRepository.findOne({
-      where: { usuarioId },
-    });
-
-    if (!cliente) {
-      throw new NotFoundException('Cliente no encontrado');
-    }
-
-    const result = await this.clienteRepository
-      .createQueryBuilder('cliente')
-      .leftJoinAndSelect('cliente_condiciones', 'cc', 'cc.cliente_id = cliente.id')
-      .leftJoinAndSelect('condiciones_salud', 'cs', 'cs.id = cc.condicion_id')
-      .where('cliente.id = :clienteId', { clienteId: cliente.id })
-      .getRawMany();
-
-    return result.map(r => ({
-      id: r.cs_id,
-      nombre: r.cs_nombre,
-      descripcion: r.cs_descripcion,
-    })).filter(c => c.id);
-  }
-
-  async addCondicionesSalud(usuarioId: number, data: AddCondicionSaludDto) {
-    const cliente = await this.clienteRepository.findOne({
-      where: { usuarioId },
-    });
-
-    if (!cliente) {
-      throw new NotFoundException('Cliente no encontrado');
-    }
-
-    // Eliminar condiciones anteriores
-    await this.clienteRepository.query(
-      'DELETE FROM cliente_condiciones WHERE cliente_id = ?',
-      [cliente.id],
-    );
-
-    // Agregar nuevas condiciones
-    if (data.condicionIds.length > 0) {
-      const values = data.condicionIds.map(id => `(${cliente.id}, ${id})`).join(',');
-      await this.clienteRepository.query(
-        `INSERT INTO cliente_condiciones (cliente_id, condicion_id) VALUES ${values}`,
+    try {
+      const response = await this.apiClient.delete(
+        `/profile/${usuarioId}/metodos-pago/${metodoPagoId}`
       );
+      return response.data;
+    } catch (error) {
+      if (error.response?.status === 404) {
+        throw new NotFoundException('Método de pago no encontrado');
+      }
+      throw error;
     }
-
-    return {
-      message: 'Condiciones de salud actualizadas exitosamente',
-    };
   }
+
+async getCondicionesSalud() {
+  try {
+    console.log('Llamando a Python: /profile/condiciones-salud');
+    const response = await this.apiClient.get('/profile/condiciones-salud');
+    console.log('Respuesta de Python:', response.data);
+    return response.data;
+  } catch (error) {
+    console.error('Error al obtener condiciones de salud:', error.response?.data || error.message);
+    throw error;
+  }
+}
+
+async getClienteCondiciones(usuarioId: number) {
+  try {
+    const response = await this.apiClient.get(`/profile/${usuarioId}/condiciones-salud`);
+    return response.data;
+  } catch (error) {
+    if (error.response?.status === 404) {
+      return [];
+    }
+    throw error;
+  }
+}
+
+async addCondicionesSalud(usuarioId: number, data: AddCondicionSaludDto) {
+  try {
+    const response = await this.apiClient.post(
+      `/profile/${usuarioId}/condiciones-salud`,
+      data
+    );
+    return response.data;
+  } catch (error) {
+    if (error.response?.status === 404) {
+      throw new NotFoundException('Cliente no encontrado');
+    }
+    throw error;
+  }
+}
 }

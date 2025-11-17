@@ -1,4 +1,4 @@
-// carrito/dto/agregar-producto.dto.ts
+
 import { IsNumber, IsPositive, Min } from 'class-validator';
 import { Type } from 'class-transformer';
 

@@ -1,196 +1,136 @@
 import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
-import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
-import { Pedido } from '../entities/pedido.entity';
-import { PedidoDetalle } from '../entities/pedido-detalle.entity';
-import { Cliente } from '../entities/cliente.entity';
-import { Sucursal } from '../entities/sucursal.entity';
+import { ConfigService } from '@nestjs/config';
+import axios, { AxiosInstance } from 'axios';
 import { LealtadService } from '../lealtad/lealtad.service';
+
 @Injectable()
 export class PedidosService {
+  private apiClient: AxiosInstance;
+
   constructor(
-    @InjectRepository(Pedido)
-    private pedidoRepository: Repository<Pedido>,
-    @InjectRepository(PedidoDetalle)
-    private pedidoDetalleRepository: Repository<PedidoDetalle>,
-    @InjectRepository(Cliente)
-    private clienteRepository: Repository<Cliente>,
-    @InjectRepository(Sucursal)
-    private sucursalRepository: Repository<Sucursal>,
+    private configService: ConfigService,
     private lealtadService: LealtadService,
-  ) {}
+  ) {
+    this.apiClient = axios.create({
+      baseURL: this.configService.get('PYTHON_API_URL') || 'http://localhost:8000',
+      timeout: 10000,
+      headers: {
+        'Content-Type': 'application/json',
+      },
+    });
+  }
+
+   async actualizarSucursal(pedidoId: number, sucursalId: number) {
+    try {
+      console.log(` NestJS: Enviando a Python - Pedido ${pedidoId}, Sucursal ${sucursalId}`);
+      
+      const response = await this.apiClient.put(
+        `/pedidos/${pedidoId}?sucursalId=${sucursalId}`
+      );
+      
+      console.log(' NestJS: Respuesta de Python:', response.data);
+      return response.data;
+    } catch (error) {
+      console.error(' NestJS: Error:', error.response?.data || error.message);
+      if (error.response?.status === 404) {
+        throw new NotFoundException('Pedido o sucursal no encontrado');
+      }
+      throw error;
+    }
+  }
 
   async crearPedidoDesdeCarrito(usuarioId: number) {
-    console.log('Buscando cliente para usuario:', usuarioId);
-    
-    const cliente = await this.clienteRepository.findOne({
-      where: { usuarioId },
-    });
+    console.log('Creando pedido desde carrito para usuario:', usuarioId);
 
-    if (!cliente) {
-      throw new NotFoundException('Cliente no encontrado');
-    }
-
-    console.log(' Cliente encontrado:', cliente.id);
-
-    // Buscar el carrito
-    const carrito = await this.pedidoRepository.findOne({
-      where: { clienteId: cliente.id, estado: 'carrito' },
-      relations: ['detalles', 'detalles.producto', 'sucursal'],
-    });
-
-    console.log(' Carrito encontrado:', carrito?.id);
-
-    if (!carrito) {
-      throw new NotFoundException('Carrito no encontrado');
-    }
-
-    if (!carrito.detalles || carrito.detalles.length === 0) {
-      throw new BadRequestException('El carrito está vacío');
-    }
-
-    if (!carrito.sucursalId) {
-      throw new BadRequestException('Debes seleccionar una sucursal');
-    }
-
-    // Cambiar estado del carrito a 'confirmado'
-    carrito.estado = 'confirmado';
-    carrito.fechaConfirmacion = new Date();
-    
-    // Calcular tiempo estimado si no existe
-    if (!carrito.tiempoEstimado) {
-      const tiempoPreparacion = carrito.detalles.reduce(
-        (max, detalle) => Math.max(max, detalle.producto.tiempoPreparacion || 0),
-        0
-      ) || 30;
-      carrito.tiempoEstimado = tiempoPreparacion;
-    }
-
-    await this.pedidoRepository.save(carrito);
-
-    console.log(' Pedido creado con ID:', carrito.id);
-
-     // AGREGAR PUNTOS DE LEALTAD
     try {
-      const puntosGanados = await this.lealtadService.agregarPuntosPorCompra(
-        usuarioId,      
-        carrito.total,  
-        carrito.id      
-      );
-      console.log(` Puntos agregados: ${puntosGanados}`);
-    } catch (error) {
-      console.error(' Error agregando puntos:', error);
-      // No lanzamos el error para que el pedido se complete aunque falle los puntos
-    }
+      const response = await this.apiClient.post('/pedidos/crear-desde-carrito', {
+        usuario_id: usuarioId,
+      });
 
-    // Retornar el pedido completo
-    return this.getPedido(usuarioId, carrito.id);
+      const pedido = response.data;
+      console.log('Pedido creado con ID:', pedido.id);
+
+      // AGREGAR PUNTOS DE LEALTAD
+      try {
+        const puntosGanados = await this.lealtadService.agregarPuntosPorCompra(
+          usuarioId,
+          pedido.total,
+          pedido.id
+        );
+        console.log(` Puntos agregados: ${puntosGanados}`);
+      } catch (error) {
+        console.error(' Error agregando puntos:', error);
+        // No lanzamos el error para que el pedido se complete aunque falle los puntos
+      }
+
+      // Retornar el pedido completo
+      return this.getPedido(usuarioId, pedido.id);
+    } catch (error) {
+      if (error.response?.status === 404) {
+        throw new NotFoundException(error.response.data.detail || 'Recurso no encontrado');
+      }
+      if (error.response?.status === 400) {
+        throw new BadRequestException(error.response.data.detail || 'Error creando pedido');
+      }
+      throw error;
+    }
   }
 
-
-  async getPedido(usuarioId: number, pedidoId: number) {
-    const cliente = await this.clienteRepository.findOne({
-      where: { usuarioId },
-    });
-
-    if (!cliente) {
-      throw new NotFoundException('Cliente no encontrado');
-    }
-
-    const pedido = await this.pedidoRepository.findOne({
-      where: { id: pedidoId, clienteId: cliente.id },
-      relations: ['detalles', 'detalles.producto', 'sucursal'],
-    });
-
-    if (!pedido) {
+async getPedido(usuarioId: number, pedidoId: number) {
+  try {
+    console.log(` NestJS: Obteniendo pedido ${pedidoId}`);
+    
+    // No enviar usuario_id, solo el pedido_id en la URL
+    const response = await this.apiClient.get(`/pedidos/${pedidoId}/detalle`);
+    
+    console.log(' NestJS: Pedido obtenido');
+    return response.data;
+  } catch (error) {
+    console.error(' NestJS: Error obteniendo pedido:', error.response?.data);
+    if (error.response?.status === 404) {
       throw new NotFoundException('Pedido no encontrado');
     }
-
-    return {
-      id: pedido.id,
-      estado: pedido.estado,
-      tipoEntrega: pedido.tipoEntrega,
-      productos: pedido.detalles?.map(d => ({
-        id: d.id,
-        productoId: d.productoId,
-        nombre: d.producto.nombre,
-        precio: d.precioUnitario,
-        cantidad: d.cantidad,
-        subtotal: d.subtotal,
-        imagen: d.producto.imagenPrincipal,
-      })) || [],
-      subtotal: pedido.subtotal,
-      descuento: pedido.descuento,
-      costoEnvio: pedido.costoEnvio,
-      total: pedido.total,
-      tiempoEstimado: pedido.tiempoEstimado,
-      sucursal: pedido.sucursal ? {
-        id: pedido.sucursal.id,
-        nombre: pedido.sucursal.nombre,
-        provincia: pedido.sucursal.provincia,
-        direccion: pedido.sucursal.direccion,
-        telefono: pedido.sucursal.telefono,
-        horario: pedido.sucursal.horario,
-      } : null,
-      fechaCreacion: pedido.fechaCreacion,
-      fechaConfirmacion: pedido.fechaConfirmacion,
-    };
+    throw error;
   }
+}
 
   async getMisPedidos(usuarioId: number) {
-    const cliente = await this.clienteRepository.findOne({
-      where: { usuarioId },
-    });
-
-    if (!cliente) {
-      throw new NotFoundException('Cliente no encontrado');
+    try {
+      const response = await this.apiClient.get(`/pedidos/usuario/${usuarioId}`);
+      
+      // Filtrar solo pedidos que no sean carritos
+      return response.data
+        .filter(p => p.estado !== 'carrito')
+        .map(pedido => ({
+          id: pedido.id,
+          estado: pedido.estado,
+          total: pedido.total,
+          cantidadProductos: pedido.cantidadProductos || 0,
+          sucursal: pedido.sucursalNombre,
+          fechaCreacion: pedido.fechaCreacion,
+        }));
+    } catch (error) {
+      if (error.response?.status === 404) {
+        return [];
+      }
+      throw error;
     }
-
-    const pedidos = await this.pedidoRepository.find({
-      where: { 
-        clienteId: cliente.id,
-      },
-      relations: ['detalles', 'detalles.producto', 'sucursal'],
-      order: { fechaCreacion: 'DESC' },
-    });
-
-    // Filtrar solo pedidos que no sean carritos
-    return pedidos
-      .filter(p => p.estado !== 'carrito')
-      .map(pedido => ({
-        id: pedido.id,
-        estado: pedido.estado,
-        total: pedido.total,
-        cantidadProductos: pedido.detalles?.length || 0,
-        sucursal: pedido.sucursal?.nombre,
-        fechaCreacion: pedido.fechaCreacion,
-      }));
   }
 
   async cancelarPedido(usuarioId: number, pedidoId: number) {
-    const cliente = await this.clienteRepository.findOne({
-      where: { usuarioId },
-    });
-
-    if (!cliente) {
-      throw new NotFoundException('Cliente no encontrado');
+    try {
+      const response = await this.apiClient.put(`/pedidos/${pedidoId}/cancelar`, {
+        usuarioId,
+      });
+      return response.data;
+    } catch (error) {
+      if (error.response?.status === 404) {
+        throw new NotFoundException('Pedido no encontrado');
+      }
+      if (error.response?.status === 400) {
+        throw new BadRequestException(error.response.data.detail || 'No se puede cancelar este pedido');
+      }
+      throw error;
     }
-
-    const pedido = await this.pedidoRepository.findOne({
-      where: { id: pedidoId, clienteId: cliente.id },
-    });
-
-    if (!pedido) {
-      throw new NotFoundException('Pedido no encontrado');
-    }
-
-    if (pedido.estado === 'completado' || pedido.estado === 'cancelado') {
-      throw new BadRequestException('No se puede cancelar este pedido');
-    }
-
-    pedido.estado = 'cancelado';
-    await this.pedidoRepository.save(pedido);
-
-    return { message: 'Pedido cancelado exitosamente' };
   }
 }

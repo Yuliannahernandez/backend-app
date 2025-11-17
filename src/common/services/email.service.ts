@@ -11,18 +11,18 @@ export class EmailService {
     this.transporter = nodemailer.createTransport({
       host: this.configService.get('SMTP_HOST') || 'smtp.gmail.com',
       port: this.configService.get('SMTP_PORT') || 587,
-      secure: false, // true para 465, false para otros puertos
+      secure: false, 
       auth: {
         user: this.configService.get('SMTP_USER'),
         pass: this.configService.get('SMTP_PASS'),
       },
-      //Ignorar certificados auto-firmados en desarrollo
+      
       tls: {
         rejectUnauthorized: false,
       },
     });
 
-    // Verificar conexión al iniciar
+    
     this.verifyConnection();
   }
 

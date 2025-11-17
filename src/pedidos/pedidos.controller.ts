@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Put, Param, UseGuards, Request, ParseIntPipe } from '@nestjs/common';
+import { Controller, Get, Post, Put, Param, UseGuards, Request, ParseIntPipe, Query } from '@nestjs/common';
 import { PedidosService } from './pedidos.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 
@@ -6,6 +6,16 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 @UseGuards(JwtAuthGuard)
 export class PedidosController {
   constructor(private readonly pedidosService: PedidosService) {}
+
+ 
+  @Put(':pedidoId')
+  async actualizarSucursal(
+    @Param('pedidoId', ParseIntPipe) pedidoId: number,
+    @Query('sucursalId', ParseIntPipe) sucursalId: number,
+  ) {
+    console.log(` Actualizando pedido ${pedidoId} con sucursal ${sucursalId}`);
+    return this.pedidosService.actualizarSucursal(pedidoId, sucursalId);
+  }
 
   @Post('crear')
   async crearPedido(@Request() req) {

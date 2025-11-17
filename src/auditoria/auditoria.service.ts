@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
-import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
-import { Auditoria, AccionAuditoria } from '../entities/auditoria.entity';
+import { ConfigService } from '@nestjs/config';
+import { AccionAuditoria } from '../entities/auditoria.entity';
+import axios, { AxiosInstance } from 'axios';
 
 export interface CreateAuditoriaDto {
   usuarioId: number;
@@ -18,18 +18,38 @@ export interface CreateAuditoriaDto {
 
 @Injectable()
 export class AuditoriaService {
-  constructor(
-    @InjectRepository(Auditoria)
-    private auditoriaRepository: Repository<Auditoria>,
-  ) {}
+  private apiClient: AxiosInstance;
+
+  constructor(private configService: ConfigService) {
+    this.apiClient = axios.create({
+      baseURL: this.configService.get('PYTHON_API_URL') || 'http://localhost:8000',
+      timeout: 10000,
+      headers: {
+        'Content-Type': 'application/json',
+      },
+    });
+  }
 
   // ==================== CREAR REGISTRO DE AUDITORÍA ====================
-  async create(data: CreateAuditoriaDto): Promise<Auditoria> {
+  async create(data: CreateAuditoriaDto): Promise<any> {
     try {
-      const auditoria = this.auditoriaRepository.create(data);
-      return await this.auditoriaRepository.save(auditoria);
+      const payload = {
+        usuarioId: data.usuarioId,
+        tabla: data.tabla,
+        accion: data.accion,
+        registroId: data.registroId || 0,
+        datosAnteriores: data.datosAnteriores ? JSON.stringify(this.sanitizeData(data.datosAnteriores)) : null,
+        datosNuevos: data.datosNuevos ? JSON.stringify(this.sanitizeData(data.datosNuevos)) : null,
+        ipAddress: data.ipAddress,
+        descripcion: data.descripcion,
+        endpoint: data.endpoint,
+        metodo: data.metodo,
+      };
+
+      const response = await this.apiClient.post('/auditoria', payload);
+      return response.data;
     } catch (error) {
-      console.error('Error al crear auditoría:', error);
+      console.error('Error al crear auditoría:', error.message);
       // No lanzar error para no interrumpir la operación principal
       return null;
     }
@@ -133,88 +153,63 @@ export class AuditoriaService {
     limit?: number;
     offset?: number;
   }) {
-    const query = this.auditoriaRepository
-      .createQueryBuilder('auditoria')
-      .leftJoinAndSelect('auditoria.usuario', 'usuario')
-      .leftJoinAndSelect('usuario.cliente', 'cliente')
-      .orderBy('auditoria.fecha', 'DESC');
+    try {
+      const params: any = {};
 
-    if (filters?.usuarioId) {
-      query.andWhere('auditoria.usuarioId = :usuarioId', { usuarioId: filters.usuarioId });
+      if (filters?.usuarioId) params.usuarioId = filters.usuarioId;
+      if (filters?.tabla) params.tabla = filters.tabla;
+      if (filters?.accion) params.accion = filters.accion;
+      if (filters?.fechaDesde) params.fechaDesde = filters.fechaDesde.toISOString();
+      if (filters?.fechaHasta) params.fechaHasta = filters.fechaHasta.toISOString();
+      if (filters?.limit) params.limit = filters.limit;
+      if (filters?.offset) params.offset = filters.offset;
+
+      const response = await this.apiClient.get('/auditoria', { params });
+      return response.data;
+    } catch (error) {
+      console.error('Error obteniendo auditorías:', error.message);
+      return { items: [], total: 0 };
     }
-
-    if (filters?.tabla) {
-      query.andWhere('auditoria.tabla = :tabla', { tabla: filters.tabla });
-    }
-
-    if (filters?.accion) {
-      query.andWhere('auditoria.accion = :accion', { accion: filters.accion });
-    }
-
-    if (filters?.fechaDesde) {
-      query.andWhere('auditoria.fecha >= :fechaDesde', { fechaDesde: filters.fechaDesde });
-    }
-
-    if (filters?.fechaHasta) {
-      query.andWhere('auditoria.fecha <= :fechaHasta', { fechaHasta: filters.fechaHasta });
-    }
-
-    if (filters?.limit) {
-      query.take(filters.limit);
-    }
-
-    if (filters?.offset) {
-      query.skip(filters.offset);
-    }
-
-    const [items, total] = await query.getManyAndCount();
-
-    return {
-      items,
-      total,
-      limit: filters?.limit,
-      offset: filters?.offset,
-    };
   }
 
   // ==================== OBTENER AUDITORÍA POR ID ====================
   async findOne(id: number) {
-    return await this.auditoriaRepository.findOne({
-      where: { id },
-      relations: ['usuario', 'usuario.cliente'],
-    });
+    try {
+      const response = await this.apiClient.get(`/auditoria/${id}`);
+      return response.data;
+    } catch (error) {
+      console.error('Error obteniendo auditoría:', error.message);
+      return null;
+    }
   }
 
   // ==================== OBTENER HISTORIAL DE UN REGISTRO ====================
   async getHistorialRegistro(tabla: string, registroId: number) {
-    return await this.auditoriaRepository.find({
-      where: { tabla, registroId },
-      relations: ['usuario', 'usuario.cliente'],
-      order: { fecha: 'DESC' },
-    });
+    try {
+      const response = await this.apiClient.get(`/auditoria/historial/${tabla}/${registroId}`);
+      return response.data;
+    } catch (error) {
+      console.error('Error obteniendo historial:', error.message);
+      return [];
+    }
   }
 
   // ==================== ESTADÍSTICAS ====================
   async getEstadisticas(usuarioId?: number) {
-    const query = this.auditoriaRepository
-      .createQueryBuilder('auditoria')
-      .select('auditoria.accion', 'accion')
-      .addSelect('COUNT(*)', 'total')
-      .groupBy('auditoria.accion');
-
-    if (usuarioId) {
-      query.where('auditoria.usuarioId = :usuarioId', { usuarioId });
+    try {
+      const params = usuarioId ? { usuarioId } : {};
+      const response = await this.apiClient.get('/auditoria/estadisticas/general', { params });
+      return response.data;
+    } catch (error) {
+      console.error('Error obteniendo estadísticas:', error.message);
+      return {
+        totalInserts: 0,
+        totalUpdates: 0,
+        totalDeletes: 0,
+        totalSelects: 0,
+        total: 0,
+      };
     }
-
-    const resultados = await query.getRawMany();
-
-    return {
-      totalInserts: Number(resultados.find(r => r.accion === 'insert')?.total || 0),
-      totalUpdates: Number(resultados.find(r => r.accion === 'update')?.total || 0),
-      totalDeletes: Number(resultados.find(r => r.accion === 'delete')?.total || 0),
-      totalSelects: Number(resultados.find(r => r.accion === 'select')?.total || 0),
-      total: resultados.reduce((sum, r) => sum + Number(r.total), 0),
-    };
   }
 
   // ==================== LIMPIAR DATOS SENSIBLES ====================
@@ -222,7 +217,7 @@ export class AuditoriaService {
     if (!data) return null;
 
     const sanitized = { ...data };
-    
+
     // Eliminar campos sensibles
     const camposSensibles = [
       'password',
@@ -235,7 +230,7 @@ export class AuditoriaService {
       'two_fa_secret',
     ];
 
-    camposSensibles.forEach(campo => {
+    camposSensibles.forEach((campo) => {
       if (sanitized[campo]) {
         sanitized[campo] = '***OCULTO***';
       }

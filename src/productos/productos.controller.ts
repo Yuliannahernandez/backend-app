@@ -30,8 +30,8 @@ export class ProductosController {
     return this.productosService.getCategorias();
   }
 
-  @Get(':id')
-  async getProducto(@Param('id') id: number) {
+  @Get(':id/detalle')
+  async getProductoDetalle(@Param('id') id: number) {
     return this.productosService.getProductoDetalle(id);
   }
 }

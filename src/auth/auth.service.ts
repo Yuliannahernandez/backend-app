@@ -1,28 +1,23 @@
 import { Injectable, UnauthorizedException, ConflictException, NotFoundException, BadRequestException } from '@nestjs/common';
-import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import * as bcrypt from 'bcrypt';
 import * as crypto from 'crypto';
 import * as speakeasy from 'speakeasy';
 import * as QRCode from 'qrcode';
-import { Usuario } from '../entities/usuario.entity';
-import { Cliente } from '../entities/cliente.entity';
 import { RegisterDto, LoginDto, ForgotPasswordDto, ResetPasswordDto } from './dto/auth.dto';
 import { OAuth2Client } from 'google-auth-library';
 import { EmailService } from '../common/services/email.service';
 import { AuditoriaService } from '../auditoria/auditoria.service';
 import { AccionAuditoria } from '../entities/auditoria.entity';
+import axios, { AxiosInstance } from 'axios';
+
 @Injectable()
 export class AuthService {
   private googleClient: OAuth2Client;
+  private apiClient: AxiosInstance;
 
   constructor(
-    @InjectRepository(Usuario)
-    private usuarioRepository: Repository<Usuario>,
-    @InjectRepository(Cliente)
-    private clienteRepository: Repository<Cliente>,
     private jwtService: JwtService,
     private configService: ConfigService,
     private emailService: EmailService,
@@ -31,51 +26,60 @@ export class AuthService {
     this.googleClient = new OAuth2Client(
       this.configService.get('GOOGLE_CLIENT_ID')
     );
+
+    this.apiClient = axios.create({
+      baseURL: this.configService.get('PYTHON_API_URL') || 'http://localhost:8000',
+      timeout: 10000,
+      headers: {
+        'Content-Type': 'application/json',
+      },
+    });
   }
 
+  // ============= HELPER: Convertir fecha a formato MySQL =============
+  private toMySQLDateTime(date: Date): string {
+    return date.toISOString().slice(0, 19).replace('T', ' ');
+  }
 
-  // ==================== REGISTRO TRADICIONAL (CON VERIFICACIÓN) ====================
+  // ==================== REGISTRO TRADICIONAL ====================
   async register(registerDto: RegisterDto) {
     const { correo, password, nombre, apellido, edad, telefono } = registerDto;
 
-    const existingUser = await this.usuarioRepository.findOne({ where: { correo } });
-    if (existingUser) {
-      throw new ConflictException('El correo electrónico ya está registrado');
+    try {
+      const existingUser = await this.apiClient.get(`/usuarios/email/${correo}`)
+        .catch(() => null);
+
+      if (existingUser?.data) {
+        throw new ConflictException('El correo electrónico ya está registrado');
+      }
+    } catch (error) {
+      if (error.response?.status !== 404) {
+        throw error;
+      }
     }
 
-    const passwordHash = await bcrypt.hash(password, 10);
+    const password_Hash = await bcrypt.hash(password, 10);
 
-    // Generar token de verificación
     const verificationToken = crypto.randomBytes(32).toString('hex');
     const tokenExpiry = new Date();
-    tokenExpiry.setHours(tokenExpiry.getHours() + 24); // Token válido por 24 horas
+    tokenExpiry.setHours(tokenExpiry.getHours() + 24);
 
-    const usuario = this.usuarioRepository.create({
+    // ✅ Convertir fecha a formato MySQL
+    const usuarioData = {
       correo,
-      passwordHash,
-      rol: 'cliente',
-      estado: 'activo',
-      isGoogleAuth: false,
-      emailVerified: false, 
-      verificationToken, 
-      verificationTokenExpiry: tokenExpiry, 
-    });
-
-    const savedUsuario = await this.usuarioRepository.save(usuario);
-
-    const cliente = this.clienteRepository.create({
-      usuarioId: savedUsuario.id,
+      password_Hash,
       nombre,
       apellido,
       edad,
       telefono,
-      idioma: 'es',
-      puntosLealtad: 0,
-    });
+      rol: 'cliente',
+      verificationToken: verificationToken,
+      verificationTokenExpiry: this.toMySQLDateTime(tokenExpiry),
+    };
 
-    await this.clienteRepository.save(cliente);
+    const response = await this.apiClient.post('/usuarios', usuarioData);
+    const savedUsuario = response.data;
 
-    // Enviar email de verificación
     await this.emailService.sendVerificationEmail(correo, verificationToken, nombre);
 
     return {
@@ -84,300 +88,227 @@ export class AuthService {
       user: {
         id: savedUsuario.id,
         correo: savedUsuario.correo,
-        nombre: cliente.nombre,
+        nombre: savedUsuario.nombre,
         emailVerified: false,
       },
     };
   }
 
-  // ==================== VERIFICAR EMAIL ====================
-  async verifyEmail(token: string) {
-    const usuario = await this.usuarioRepository.findOne({
-      where: { verificationToken: token },
-      relations: ['cliente'],
-    });
+  // ==================== LOGIN TRADICIONAL ====================
+  async login(loginDto: LoginDto) {
+    const { correo, password, twoFACode } = loginDto;
 
-    if (!usuario) {
-      throw new NotFoundException('Token de verificación inválido');
-    }
-
-    if (new Date() > usuario.verificationTokenExpiry) {
-      throw new UnauthorizedException('El token de verificación ha expirado');
-    }
-
-    if (usuario.emailVerified) {
-      throw new BadRequestException('El correo ya ha sido verificado');
-    }
-
-    // Marcar como verificado
-    usuario.emailVerified = true;
-    usuario.verificationToken = null;
-    usuario.verificationTokenExpiry = null;
-    await this.usuarioRepository.save(usuario);
-
-    // Enviar email de bienvenida
-    await this.emailService.sendWelcomeEmail(usuario.correo, usuario.cliente?.nombre || 'Usuario');
-
-    // Generar token JWT para login automático
-    const jwtToken = this.generateToken(usuario);
-
-    return {
-      message: 'Correo verificado exitosamente',
-      token: jwtToken,
-      user: {
-        id: usuario.id,
-        correo: usuario.correo,
-        rol: usuario.rol,
-        nombre: usuario.cliente?.nombre,
-        apellido: usuario.cliente?.apellido,
-        emailVerified: true,
-        is2FAEnabled: usuario.is2FAEnabled,
-      },
-    };
-  }
-
-  // ==================== REENVIAR EMAIL DE VERIFICACIÓN ====================
-  async resendVerificationEmail(correo: string) {
-    const usuario = await this.usuarioRepository.findOne({
-      where: { correo },
-      relations: ['cliente'],
-    });
-
-    if (!usuario) {
-      // No revelar si el usuario existe o no
-      return {
-        message: 'Si el correo existe, se enviará un nuevo email de verificación',
-      };
-    }
-
-    if (usuario.emailVerified) {
-      throw new BadRequestException('El correo ya está verificado');
-    }
-
-    // Generar nuevo token
-    const verificationToken = crypto.randomBytes(32).toString('hex');
-    const tokenExpiry = new Date();
-    tokenExpiry.setHours(tokenExpiry.getHours() + 24);
-
-    usuario.verificationToken = verificationToken;
-    usuario.verificationTokenExpiry = tokenExpiry;
-    await this.usuarioRepository.save(usuario);
-
-    // Enviar email
-    await this.emailService.sendVerificationEmail(
-      correo,
-      verificationToken,
-      usuario.cliente?.nombre || 'Usuario'
-    );
-
-    return {
-      message: 'Email de verificación enviado',
-    };
-  }
-
-// ==================== LOGIN TRADICIONAL (CON AUDITORÍA) ====================
-async login(loginDto: LoginDto) {
-  const { correo, password, twoFACode } = loginDto;
-
-  const usuario = await this.usuarioRepository.findOne({
-    where: { correo },
-    relations: ['cliente'],
-  });
-
-  if (!usuario || usuario.isGoogleAuth) {
-    throw new UnauthorizedException('Credenciales inválidas');
-  }
-
-  const isPasswordValid = await bcrypt.compare(password, usuario.passwordHash);
-  if (!isPasswordValid) {
-    
     try {
-      await this.auditoriaService.create({
-        usuarioId: 0, // Usuario no identificado
-        tabla: 'usuarios',
-        accion: AccionAuditoria.SELECT,
-        registroId: 0,
-        datosNuevos: { correo, resultado: 'Credenciales inválidas' },
-        ipAddress: undefined,
-        descripcion: `Intento de login fallido: ${correo}`,
-        endpoint: '/auth/login',
-        metodo: 'POST',
-      });
-    } catch (error) {
-      console.error('Error auditando intento fallido:', error);
-    }
-    throw new UnauthorizedException('Credenciales inválidas');
-  }
+      const response = await this.apiClient.get(`/usuarios/email/${correo}`);
+      const usuario = response.data;
 
-  if (usuario.estado !== 'activo') {
-    throw new UnauthorizedException('Cuenta inactiva o suspendida');
-  }
+      if (!usuario) {
+        throw new UnauthorizedException('Credenciales inválidas');
+      }
 
-  if (!usuario.emailVerified) {
-    return {
-      requiresVerification: true,
-      message: 'Por favor verifica tu correo electrónico antes de iniciar sesión',
-      correo: usuario.correo,
-    };
-  }
+      const passwordHash = usuario.passwordHash || usuario.password_hash || usuario.password;
 
-  if (usuario.is2FAEnabled) {
-    if (!twoFACode) {
+      if (!passwordHash) {
+        console.error('❌ No se encontró campo de contraseña en el usuario:', usuario);
+        throw new UnauthorizedException('Error interno: usuario sin hash de contraseña');
+      }
+
+      const isPasswordValid = await bcrypt.compare(password, passwordHash);
+
+      if (!isPasswordValid) {
+        try {
+          await this.auditoriaService.create({
+            usuarioId: 0,
+            tabla: 'usuarios',
+            accion: AccionAuditoria.SELECT,
+            registroId: 0,
+            datosNuevos: { correo, resultado: 'Credenciales inválidas' },
+            ipAddress: undefined,
+            descripcion: `Intento de login fallido: ${correo}`,
+            endpoint: '/auth/login',
+            metodo: 'POST',
+          });
+        } catch (error) {
+          console.error('Error auditando intento fallido:', error);
+        }
+        throw new UnauthorizedException('Credenciales inválidas');
+      }
+
+      if (usuario.estado !== 'activo') {
+        throw new UnauthorizedException('Cuenta inactiva o suspendida');
+      }
+
+      if (!usuario.emailVerified) {
+        return {
+          requiresVerification: true,
+          message: 'Por favor verifica tu correo electrónico antes de iniciar sesión',
+          correo: usuario.correo,
+        };
+      }
+
+      if (usuario.is2FAEnabled) {
+        if (!twoFACode) {
+          return {
+            requires2FA: true,
+            message: 'Se requiere código 2FA',
+          };
+        }
+
+        const isValid = speakeasy.totp.verify({
+          secret: usuario.twoFASecret,
+          encoding: 'base32',
+          token: twoFACode,
+          window: 2,
+        });
+
+        if (!isValid) {
+          throw new UnauthorizedException('Código 2FA inválido');
+        }
+      }
+
+      // ✅ Actualizar último acceso con formato MySQL
+      try {
+        await this.apiClient.put(`/usuarios/${usuario.id}/ultimo-acceso`, {});
+      } catch (error) {
+        console.error('Error actualizando último acceso:', error);
+      }
+
+      try {
+        await this.auditoriaService.logSelect(
+          usuario.id,
+          'usuarios',
+          undefined,
+          '/auth/login',
+          `Login exitoso: ${correo}`,
+        );
+      } catch (error) {
+        console.error('Error auditando login:', error);
+      }
+
+      const token = this.generateToken(usuario);
+
       return {
-        requires2FA: true,
-        message: 'Se requiere código 2FA',
+        message: 'Inicio de sesión exitoso',
+        token,
+        user: {
+          id: usuario.id,
+          correo: usuario.correo,
+          rol: usuario.rol,
+          nombre: usuario.nombre,
+          apellido: usuario.apellido,
+          puntosLealtad: usuario.puntosLealtad || usuario.puntos_lealtad,
+          emailVerified: usuario.emailVerified,
+          is2FAEnabled: usuario.is2FAEnabled || usuario.is_2fa_enabled,
+        },
       };
-    }
-
-    const isValid = speakeasy.totp.verify({
-      secret: usuario.twoFASecret,
-      encoding: 'base32',
-      token: twoFACode,
-      window: 2,
-    });
-
-    if (!isValid) {
-      throw new UnauthorizedException('Código 2FA inválido');
+    } catch (error) {
+      if (error.response?.status === 404) {
+        throw new UnauthorizedException('Credenciales inválidas');
+      }
+      throw error;
     }
   }
 
-  usuario.ultimoAcceso = new Date();
-  await this.usuarioRepository.save(usuario);
-
-  // AUDITAR LOGIN EXITOSO
-  try {
-    await this.auditoriaService.logSelect(
-      usuario.id,
-      'usuarios',
-      undefined,
-      '/auth/login',
-      `Login exitoso: ${correo}`,
-    );
-  } catch (error) {
-    console.error('Error auditando login:', error);
-  }
-
-  const token = this.generateToken(usuario);
-
-  return {
-    message: 'Inicio de sesión exitoso',
-    token,
-    user: {
-      id: usuario.id,
-      correo: usuario.correo,
-      rol: usuario.rol,
-      nombre: usuario.cliente?.nombre,
-      apellido: usuario.cliente?.apellido,
-      puntosLealtad: usuario.cliente?.puntosLealtad,
-      emailVerified: usuario.emailVerified,
-      is2FAEnabled: usuario.is2FAEnabled,
-    },
-  };
-}
   // ==================== GOOGLE OAUTH ====================
   async googleLogin(googleUser: any) {
     const { googleId, email, firstName, lastName } = googleUser;
 
-    let usuario = await this.usuarioRepository.findOne({
-      where: [{ googleId }, { correo: email }],
-      relations: ['cliente'],
-    });
+    try {
+      const response = await this.apiClient.get(`/usuarios/email/${email}`)
+        .catch(() => null);
 
-    if (!usuario) {
-      // Crear nuevo usuario con Google
-      usuario = this.usuarioRepository.create({
-        correo: email,
-        googleId,
-        rol: 'cliente',
-        estado: 'activo',
-        isGoogleAuth: true,
-        emailVerified: true,
-      });
+      let usuario = response?.data;
 
-      const savedUsuario = await this.usuarioRepository.save(usuario);
+      if (!usuario) {
+        const passwordHash = await bcrypt.hash(crypto.randomBytes(32).toString('hex'), 10);
 
-      const cliente = this.clienteRepository.create({
-        usuarioId: savedUsuario.id,
-        nombre: firstName,
-        apellido: lastName,
-        idioma: 'es',
-        puntosLealtad: 0,
-      });
+        const nuevoUsuario = {
+          correo: email,
+          password_Hash: passwordHash,
+          nombre: firstName,
+          apellido: lastName,
+          rol: 'cliente',
+        };
 
-      await this.clienteRepository.save(cliente);
-      usuario.cliente = cliente;
-    } else {
-      // Actualizar información de Google si es necesario
-      if (!usuario.googleId) {
-        usuario.googleId = googleId;
-        usuario.isGoogleAuth = true;
-        usuario.emailVerified = true;
-        await this.usuarioRepository.save(usuario);
+        const createResponse = await this.apiClient.post('/usuarios', nuevoUsuario);
+        usuario = createResponse.data;
       }
 
-      usuario.ultimoAcceso = new Date();
-      await this.usuarioRepository.save(usuario);
+      const token = this.generateToken(usuario);
+
+      return {
+        message: 'Inicio de sesión con Google exitoso',
+        token,
+        user: {
+          id: usuario.id,
+          correo: usuario.correo,
+          rol: usuario.rol,
+          nombre: usuario.nombre,
+          apellido: usuario.apellido,
+          puntosLealtad: usuario.puntosLealtad || usuario.puntos_lealtad,
+          emailVerified: true,
+          is2FAEnabled: usuario.is2FAEnabled || false,
+        },
+      };
+    } catch (error) {
+      console.error('Error en googleLogin:', error);
+      throw new UnauthorizedException('Error al iniciar sesión con Google');
     }
-
-    const token = this.generateToken(usuario);
-
-    return {
-      message: 'Inicio de sesión con Google exitoso',
-      token,
-      user: {
-        id: usuario.id,
-        correo: usuario.correo,
-        rol: usuario.rol,
-        nombre: usuario.cliente?.nombre,
-        apellido: usuario.cliente?.apellido,
-        puntosLealtad: usuario.cliente?.puntosLealtad,
-        emailVerified: usuario.emailVerified,
-        is2FAEnabled: usuario.is2FAEnabled,
-      },
-    };
   }
 
   // ==================== 2FA - GENERAR QR ====================
   async generate2FA(userId: number) {
-    const usuario = await this.usuarioRepository.findOne({ where: { id: userId } });
-    if (!usuario) {
-      throw new NotFoundException('Usuario no encontrado');
+    try {
+      const response = await this.apiClient.get(`/usuarios/${userId}`);
+      const usuario = response.data;
+
+      if (!usuario) {
+        throw new NotFoundException('Usuario no encontrado');
+      }
+
+      if (usuario.is2FAEnabled || usuario.is_2fa_enabled) {
+        throw new BadRequestException('2FA ya está habilitado');
+      }
+
+      const secret = speakeasy.generateSecret({
+        name: `${this.configService.get('APP_NAME')} (${usuario.correo})`,
+        issuer: this.configService.get('APP_NAME'),
+      });
+
+      await this.apiClient.put(`/usuarios/${userId}`, {
+        two_fa_secret: secret.base32,
+      });
+
+      const qrCodeUrl = await QRCode.toDataURL(secret.otpauth_url);
+
+      return {
+        secret: secret.base32,
+        qrCode: qrCodeUrl,
+        message: 'Escanea este código QR con Google Authenticator',
+      };
+    } catch (error) {
+      if (error.response?.status === 404) {
+        throw new NotFoundException('Usuario no encontrado');
+      }
+      throw error;
     }
-
-    if (usuario.is2FAEnabled) {
-      throw new BadRequestException('2FA ya está habilitado');
-    }
-
-    const secret = speakeasy.generateSecret({
-      name: `${this.configService.get('APP_NAME')} (${usuario.correo})`,
-      issuer: this.configService.get('APP_NAME'),
-    });
-
-    usuario.twoFASecret = secret.base32;
-    await this.usuarioRepository.save(usuario);
-
-    const qrCodeUrl = await QRCode.toDataURL(secret.otpauth_url);
-
-    return {
-      secret: secret.base32,
-      qrCode: qrCodeUrl,
-      message: 'Escanea este código QR con Google Authenticator',
-    };
   }
 
   // ==================== 2FA - HABILITAR ====================
   async enable2FA(userId: number, token: string) {
-    const usuario = await this.usuarioRepository.findOne({ where: { id: userId } });
+    const response = await this.apiClient.get(`/usuarios/${userId}`);
+    const usuario = response.data;
+
     if (!usuario) {
       throw new NotFoundException('Usuario no encontrado');
     }
 
-    if (!usuario.twoFASecret) {
+    if (!usuario.twoFASecret && !usuario.two_fa_secret) {
       throw new BadRequestException('Primero debes generar el código QR');
     }
 
     const isValid = speakeasy.totp.verify({
-      secret: usuario.twoFASecret,
+      secret: usuario.twoFASecret || usuario.two_fa_secret,
       encoding: 'base32',
       token,
       window: 2,
@@ -387,8 +318,9 @@ async login(loginDto: LoginDto) {
       throw new UnauthorizedException('Código inválido');
     }
 
-    usuario.is2FAEnabled = true;
-    await this.usuarioRepository.save(usuario);
+    await this.apiClient.put(`/usuarios/${userId}`, {
+      is_2fa_enabled: true,
+    });
 
     return {
       message: '2FA habilitado exitosamente',
@@ -398,17 +330,19 @@ async login(loginDto: LoginDto) {
 
   // ==================== 2FA - DESHABILITAR ====================
   async disable2FA(userId: number, token: string) {
-    const usuario = await this.usuarioRepository.findOne({ where: { id: userId } });
+    const response = await this.apiClient.get(`/usuarios/${userId}`);
+    const usuario = response.data;
+
     if (!usuario) {
       throw new NotFoundException('Usuario no encontrado');
     }
 
-    if (!usuario.is2FAEnabled) {
+    if (!usuario.is2FAEnabled && !usuario.is_2fa_enabled) {
       throw new BadRequestException('2FA no está habilitado');
     }
 
     const isValid = speakeasy.totp.verify({
-      secret: usuario.twoFASecret,
+      secret: usuario.twoFASecret || usuario.two_fa_secret,
       encoding: 'base32',
       token,
       window: 2,
@@ -418,9 +352,10 @@ async login(loginDto: LoginDto) {
       throw new UnauthorizedException('Código inválido');
     }
 
-    usuario.is2FAEnabled = false;
-    usuario.twoFASecret = null;
-    await this.usuarioRepository.save(usuario);
+    await this.apiClient.put(`/usuarios/${userId}`, {
+      is_2fa_enabled: false,
+      two_fa_secret: null,
+    });
 
     return {
       message: '2FA deshabilitado exitosamente',
@@ -430,13 +365,15 @@ async login(loginDto: LoginDto) {
 
   // ==================== VERIFICAR 2FA ====================
   async verify2FA(userId: number, token: string) {
-    const usuario = await this.usuarioRepository.findOne({ where: { id: userId } });
-    if (!usuario || !usuario.is2FAEnabled) {
+    const response = await this.apiClient.get(`/usuarios/${userId}`);
+    const usuario = response.data;
+
+    if (!usuario || (!usuario.is2FAEnabled && !usuario.is_2fa_enabled)) {
       throw new BadRequestException('2FA no está habilitado');
     }
 
     const isValid = speakeasy.totp.verify({
-      secret: usuario.twoFASecret,
+      secret: usuario.twoFASecret || usuario.two_fa_secret,
       encoding: 'base32',
       token,
       window: 2,
@@ -450,78 +387,80 @@ async login(loginDto: LoginDto) {
 
   // ==================== RECUPERAR CONTRASEÑA ====================
   async forgotPassword(forgotPasswordDto: ForgotPasswordDto) {
-  const { correo } = forgotPasswordDto;
+    const { correo } = forgotPasswordDto;
 
-  const usuario = await this.usuarioRepository.findOne({ 
-    where: { correo },
-    relations: ['cliente'],
-  });
+    try {
+      const response = await this.apiClient.get(`/usuarios/email/${correo}`);
+      const usuario = response.data;
 
-  if (!usuario) {
-    return {
-      message: 'Si el correo existe, se enviará un enlace de recuperación',
-    };
+      if (!usuario) {
+        return {
+          message: 'Si el correo existe, se enviará un enlace de recuperación',
+        };
+      }
+
+      const token = crypto.randomBytes(32).toString('hex');
+      const expiracion = new Date();
+      expiracion.setHours(expiracion.getHours() + 1);
+
+      // ✅ Convertir fecha a formato MySQL
+      await this.apiClient.put(`/usuarios/${usuario.id}`, {
+        token_recuperacion: token,
+        token_expiracion: this.toMySQLDateTime(expiracion),
+      });
+
+      await this.emailService.sendPasswordResetEmail(
+        correo,
+        token,
+        usuario.nombre || 'Usuario'
+      );
+
+      return {
+        message: 'Si el correo existe, se enviará un enlace de recuperación',
+        ...(process.env.NODE_ENV === 'development' && {
+          token,
+          resetUrl: `${this.configService.get('FRONTEND_URL')}/reset-password?token=${token}`,
+        }),
+      };
+    } catch (error) {
+      return {
+        message: 'Si el correo existe, se enviará un enlace de recuperación',
+      };
+    }
   }
-
-  const token = crypto.randomBytes(32).toString('hex');
-  const expiracion = new Date();
-  expiracion.setHours(expiracion.getHours() + 1);
-
-  usuario.tokenRecuperacion = token;
-  usuario.tokenExpiracion = expiracion;
-  await this.usuarioRepository.save(usuario);
-
-  console.log(`✅ Token generado: ${token}`);
-  
-  // ✅ ESTA ES LA PARTE IMPORTANTE QUE FALTA
-  try {
-    console.log('📤 Intentando enviar email...');
-    await this.emailService.sendPasswordResetEmail(
-      correo, 
-      token, 
-      usuario.cliente?.nombre || 'Usuario'
-    );
-    console.log('✅ Email enviado!');
-  } catch (error) {
-    console.error('❌ Error:', error.message);
-  }
-
-  return {
-    message: 'Si el correo existe, se enviará un enlace de recuperación',
-    ...(process.env.NODE_ENV === 'development' && { 
-      token,
-      resetUrl: `${this.configService.get('FRONTEND_URL')}/reset-password?token=${token}`,
-    }),
-  };
-}
 
   async resetPassword(resetPasswordDto: ResetPasswordDto) {
     const { token, nuevaPassword } = resetPasswordDto;
 
-    const usuario = await this.usuarioRepository.findOne({
-      where: { tokenRecuperacion: token },
-    });
+    try {
+      const response = await this.apiClient.get(`/usuarios/recovery-token/${token}`);
+      const usuario = response.data;
 
-    if (!usuario) {
-      throw new NotFoundException('Token inválido');
+      if (!usuario) {
+        throw new NotFoundException('Token inválido');
+      }
+
+      const passwordHash = await bcrypt.hash(nuevaPassword, 10);
+
+      await this.apiClient.put(`/usuarios/${usuario.id}`, {
+        password_hash: passwordHash,
+        token_recuperacion: null,
+        token_expiracion: null,
+      });
+
+      return {
+        message: 'Contraseña actualizada exitosamente',
+      };
+    } catch (error) {
+      if (error.response?.status === 404) {
+        throw new NotFoundException('Token inválido');
+      }
+      throw error;
     }
-
-    if (new Date() > usuario.tokenExpiracion) {
-      throw new UnauthorizedException('Token expirado');
-    }
-
-    usuario.passwordHash = await bcrypt.hash(nuevaPassword, 10);
-    usuario.tokenRecuperacion = null;
-    usuario.tokenExpiracion = null;
-    await this.usuarioRepository.save(usuario);
-
-    return {
-      message: 'Contraseña actualizada exitosamente',
-    };
   }
 
   // ==================== HELPERS ====================
-  private generateToken(usuario: Usuario): string {
+  private generateToken(usuario: any): string {
     const payload = {
       sub: usuario.id,
       correo: usuario.correo,
@@ -532,110 +471,187 @@ async login(loginDto: LoginDto) {
   }
 
   async validateUser(userId: number) {
-    const usuario = await this.usuarioRepository.findOne({
-      where: { id: userId },
-      relations: ['cliente'],
-    });
+    try {
+      const response = await this.apiClient.get(`/usuarios/${userId}`);
+      const usuario = response.data;
 
-    if (!usuario || usuario.estado !== 'activo') {
+      if (!usuario || usuario.estado !== 'activo') {
+        throw new UnauthorizedException('Usuario no válido');
+      }
+
+      return {
+        id: usuario.id,
+        correo: usuario.correo,
+        rol: usuario.rol,
+        nombre: usuario.nombre,
+        apellido: usuario.apellido,
+        is2FAEnabled: usuario.is2FAEnabled || usuario.is_2fa_enabled,
+      };
+    } catch (error) {
       throw new UnauthorizedException('Usuario no válido');
     }
-
-    return {
-      id: usuario.id,
-      correo: usuario.correo,
-      rol: usuario.rol,
-      nombre: usuario.cliente?.nombre,
-      apellido: usuario.cliente?.apellido,
-      is2FAEnabled: usuario.is2FAEnabled,
-    };
   }
-    // ==================== VERIFICAR TOKEN DE GOOGLE (NUEVO) ====================
+
+  // ==================== VERIFICAR TOKEN DE GOOGLE ====================
   async verifyGoogleToken(token: string) {
-  try {
-    console.log(' Token recibido:', token?.substring(0, 50) + '...');
-    console.log(' Client ID esperado:', this.configService.get('GOOGLE_CLIENT_ID'));
+    try {
+      const ticket = await this.googleClient.verifyIdToken({
+        idToken: token,
+        audience: this.configService.get('GOOGLE_CLIENT_ID'),
+      });
 
-    const ticket = await this.googleClient.verifyIdToken({
-      idToken: token,
-      audience: this.configService.get('GOOGLE_CLIENT_ID'),
-    });
+      const payload = ticket.getPayload();
 
-    const payload = ticket.getPayload();
-    console.log('Payload de Google:', payload);
+      const googleUser = {
+        googleId: payload.sub,
+        email: payload.email,
+        firstName: payload.given_name || 'Usuario',
+        lastName: payload.family_name || 'Google',
+      };
 
-    const googleUser = {
-      googleId: payload.sub,
-      email: payload.email,
-      firstName: payload.given_name || 'Usuario',  
-      lastName: payload.family_name || 'Google',  
-    };
-
-
-     console.log('Google User:', googleUser);
-
-    return await this.googleLogin(googleUser);
-  } catch (error) {
-    console.error(' Error verificando token:', error.message);
-    throw new UnauthorizedException('Token de Google inválido: ' + error.message);
-  }
-}
-// ==================== BUSCAR CUENTA POR DATOS ====================
-async findAccount(searchType: string, searchData: any) {
-  let usuario;
-
-  if (searchType === 'phone') {
-    // Buscar por teléfono
-    const cliente = await this.clienteRepository.findOne({
-      where: { telefono: searchData.telefono },
-      relations: ['usuario'],
-    });
-    
-    if (cliente && cliente.usuario) {
-      usuario = cliente.usuario;
-    }
-  } else if (searchType === 'name') {
-    // Buscar por nombre y apellido
-    const cliente = await this.clienteRepository.findOne({
-      where: { 
-        nombre: searchData.nombre,
-        apellido: searchData.apellido,
-      },
-      relations: ['usuario'],
-    });
-    
-    if (cliente && cliente.usuario) {
-      usuario = cliente.usuario;
+      return await this.googleLogin(googleUser);
+    } catch (error) {
+      throw new UnauthorizedException('Token de Google inválido: ' + error.message);
     }
   }
 
-  if (!usuario) {
-    return {
-      found: false,
-      message: 'No se encontró ninguna cuenta con esa información',
-    };
+  // ==================== VERIFICAR EMAIL ====================
+  async verifyEmail(token: string) {
+    try {
+      const response = await this.apiClient.get(`/usuarios/verification-token/${token}`);
+      const usuario = response.data;
+
+      if (!usuario) {
+        throw new NotFoundException('Token de verificación inválido');
+      }
+
+      if (usuario.emailVerified) {
+        throw new BadRequestException('El correo ya ha sido verificado');
+      }
+
+      await this.apiClient.put(`/usuarios/${usuario.id}`, {
+        emailVerified: true,
+        verificationToken: null,
+        verificationTokenExpiry: null,
+      });
+
+      await this.emailService.sendWelcomeEmail(usuario.correo, usuario.nombre || 'Usuario');
+
+      const jwtToken = this.generateToken(usuario);
+
+      return {
+        message: 'Correo verificado exitosamente',
+        token: jwtToken,
+        user: {
+          id: usuario.id,
+          correo: usuario.correo,
+          rol: usuario.rol,
+          nombre: usuario.nombre,
+          apellido: usuario.apellido,
+          emailVerified: true,
+          is2FAEnabled: usuario.is2FAEnabled || usuario.is_2fa_enabled,
+        },
+      };
+    } catch (error) {
+      if (error.response?.status === 404) {
+        throw new NotFoundException('Token de verificación inválido');
+      }
+      if (error.response?.status === 400) {
+        throw new BadRequestException(error.response.data.detail);
+      }
+      throw error;
+    }
   }
 
-  // Ocultar parte del correo por seguridad
-  const correoOculto = this.maskEmail(usuario.correo);
+  // ==================== REENVIAR VERIFICACIÓN ====================
+  async resendVerificationEmail(correo: string) {
+    try {
+      const response = await this.apiClient.get(`/usuarios/email/${correo}`);
+      const usuario = response.data;
 
-  return {
-    found: true,
-    correo: correoOculto,
-    // Solo mostrar correo completo si ya pasó verificación de seguridad
-    fullEmail: usuario.correo,
-    message: 'Cuenta encontrada',
-  };
-}
+      if (!usuario) {
+        return {
+          message: 'Si el correo existe, se enviará un nuevo email de verificación',
+        };
+      }
 
-// Helper para ocultar email
-private maskEmail(email: string): string {
-  const [localPart, domain] = email.split('@');
-  const visibleChars = Math.min(3, Math.floor(localPart.length / 2));
-  const maskedLocal = 
-    localPart.substring(0, visibleChars) + 
-    '*'.repeat(localPart.length - visibleChars);
-  return `${maskedLocal}@${domain}`;
-}
-}
+      if (usuario.emailVerified) {
+        throw new BadRequestException('El correo ya está verificado');
+      }
 
+      const verificationToken = crypto.randomBytes(32).toString('hex');
+      const tokenExpiry = new Date();
+      tokenExpiry.setHours(tokenExpiry.getHours() + 24);
+
+      // ✅ Convertir fecha a formato MySQL
+      await this.apiClient.put(`/usuarios/${usuario.id}`, {
+        verificationToken,
+        verificationTokenExpiry: this.toMySQLDateTime(tokenExpiry),
+      });
+
+      await this.emailService.sendVerificationEmail(
+        correo,
+        verificationToken,
+        usuario.nombre || 'Usuario'
+      );
+
+      return {
+        message: 'Email de verificación enviado',
+      };
+    } catch (error) {
+      return {
+        message: 'Si el correo existe, se enviará un nuevo email de verificación',
+      };
+    }
+  }
+
+  // ==================== BUSCAR CUENTA ====================
+  async findAccount(searchType: string, searchData: any) {
+    try {
+      let response;
+
+      if (searchType === 'phone') {
+        response = await this.apiClient.get(`/usuarios/by-phone/${searchData.telefono}`);
+      } else if (searchType === 'name') {
+        response = await this.apiClient.get(`/usuarios/by-name`, {
+          params: {
+            nombre: searchData.nombre,
+            apellido: searchData.apellido,
+          },
+        });
+      }
+
+      const usuario = response?.data;
+
+      if (!usuario) {
+        return {
+          found: false,
+          message: 'No se encontró ninguna cuenta con esa información',
+        };
+      }
+
+      const correoOculto = this.maskEmail(usuario.correo);
+
+      return {
+        found: true,
+        correo: correoOculto,
+        fullEmail: usuario.correo,
+        message: 'Cuenta encontrada',
+      };
+    } catch (error) {
+      return {
+        found: false,
+        message: 'No se encontró ninguna cuenta con esa información',
+      };
+    }
+  }
+
+  private maskEmail(email: string): string {
+    const [localPart, domain] = email.split('@');
+    const visibleChars = Math.min(3, Math.floor(localPart.length / 2));
+    const maskedLocal =
+      localPart.substring(0, visibleChars) +
+      '*'.repeat(localPart.length - visibleChars);
+    return `${maskedLocal}@${domain}`;
+  }
+}

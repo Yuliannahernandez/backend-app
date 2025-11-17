@@ -1,146 +1,131 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
-import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
-import { Producto } from '../entities/producto.entity';
-import { Categoria } from '../entities/categoria.entity';
+import { Injectable, NotFoundException, HttpException, HttpStatus } from '@nestjs/common';
+import { HttpService } from '@nestjs/axios';
+import { ConfigService } from '@nestjs/config';
+import { firstValueFrom } from 'rxjs';
 
 @Injectable()
 export class ProductosService {
+  private readonly apiUrl: string;
+
   constructor(
-    @InjectRepository(Producto)
-    private productoRepository: Repository<Producto>,
-    @InjectRepository(Categoria)
-    private categoriaRepository: Repository<Categoria>,
-  ) {}
+    private readonly httpService: HttpService,
+    private readonly configService: ConfigService,
+  ) {
+    this.apiUrl = this.configService.get<string>('PYTHON_API_URL') || 'http://localhost:8000';
+  }
 
   async getProductos(categoriaId?: number) {
-    const where: any = { disponible: true };
-    if (categoriaId) {
-      where.categoriaId = categoriaId;
+    try {
+      const url = categoriaId 
+        ? `${this.apiUrl}/categorias/${categoriaId}/productos`
+        : `${this.apiUrl}/productos`;
+      
+      const response = await firstValueFrom(
+        this.httpService.get(url)
+      );
+
+      console.log('Productos recibidos:', response.data.length);
+      
+      
+      return response.data;
+    } catch (error) {
+      console.error(' Error FastAPI ->', error.message);
+      throw new HttpException(
+        'Error al obtener productos',
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
     }
-
-    const productos = await this.productoRepository.find({
-      where,
-      relations: ['categoria'],
-      order: { fechaCreacion: 'DESC' },
-    });
-
-    return productos.map(p => ({
-      id: p.id,
-      nombre: p.nombre,
-      descripcion: p.descripcion,
-      precio: p.precio,
-      imagenPrincipal: p.imagenPrincipal,
-      categoria: p.categoria.nombre,
-      categoriaId: p.categoriaId,
-      esNuevo: p.esNuevo,
-      enTendencia: p.enTendencia,
-    }));
   }
 
   async getProductosNuevos() {
-    const productos = await this.productoRepository.find({
-      where: { esNuevo: true, disponible: true },
-      relations: ['categoria'],
-      order: { fechaCreacion: 'DESC' },
-      take: 10,
-    });
+    try {
+      const response = await firstValueFrom(
+        this.httpService.get(`${this.apiUrl}/productos`)
+      );
 
-    return productos.map(p => ({
-      id: p.id,
-      nombre: p.nombre,
-      precio: p.precio,
-      imagenPrincipal: p.imagenPrincipal,
-      categoria: p.categoria.nombre,
-    }));
+      const productosNuevos = response.data
+        .filter((p: any) => p.es_nuevo && p.disponible)
+        .slice(0, 10);
+
+      console.log('Productos nuevos:', productosNuevos.length);
+      return productosNuevos;
+    } catch (error) {
+      throw new HttpException(
+        'Error al obtener productos nuevos',
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
+    }
   }
 
   async getProductosTendencia() {
-    const productos = await this.productoRepository.find({
-      where: { enTendencia: true, disponible: true },
-      relations: ['categoria'],
-      order: { fechaCreacion: 'DESC' },
-      take: 10,
-    });
+    try {
+      const response = await firstValueFrom(
+        this.httpService.get(`${this.apiUrl}/productos`)
+      );
 
-    return productos.map(p => ({
-      id: p.id,
-      nombre: p.nombre,
-      precio: p.precio,
-      imagenPrincipal: p.imagenPrincipal,
-      categoria: p.categoria.nombre,
-    }));
+      const productosTendencia = response.data
+        .filter((p: any) => p.en_tendencia && p.disponible)
+        .slice(0, 10);
+
+      console.log('Productos en tendencia:', productosTendencia.length);
+      return productosTendencia;
+    } catch (error) {
+      throw new HttpException(
+        'Error al obtener productos en tendencia',
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
+    }
   }
 
   async getProductoDestacado() {
-    const producto = await this.productoRepository.findOne({
-      where: { disponible: true, enTendencia: true },
-      relations: ['categoria'],
-      order: { fechaCreacion: 'DESC' },
-    });
+    try {
+      const response = await firstValueFrom(
+        this.httpService.get(`${this.apiUrl}/productos`)
+      );
 
-    if (!producto) {
-      return null;
+      const destacado = response.data.find(
+        (p: any) => p.disponible && p.en_tendencia
+      );
+
+      return destacado || null;
+    } catch (error) {
+      throw new HttpException(
+        'Error al obtener producto destacado',
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
     }
-
-    return {
-      id: producto.id,
-      nombre: producto.nombre,
-      precio: producto.precio,
-      imagenPrincipal: producto.imagenPrincipal,
-      categoria: producto.categoria.nombre,
-    };
   }
 
   async getCategorias() {
-    const categorias = await this.categoriaRepository.find({
-      where: { activa: true },
-      order: { orden: 'ASC' },
-    });
+    try {
+      const response = await firstValueFrom(
+        this.httpService.get(`${this.apiUrl}/categorias`)
+      );
 
-    return categorias.map(c => ({
-      id: c.id,
-      nombre: c.nombre,
-      descripcion: c.descripcion,
-      icono: c.icono,
-    }));
+      return response.data;
+    } catch (error) {
+      throw new HttpException(
+        'Error al obtener categorías',
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
+    }
   }
 
   async getProductoDetalle(id: number) {
-    const producto = await this.productoRepository.findOne({
-      where: { id, disponible: true },
-      relations: ['categoria', 'imagenes', 'ingredientes', 'ingredientes.ingrediente', 'informacionNutricional'],
-    });
+    try {
+      const response = await firstValueFrom(
+        this.httpService.get(`${this.apiUrl}/productos/${id}/detalle`)
+      );
 
-    if (!producto) {
-      throw new NotFoundException('Producto no encontrado');
+      return response.data;
+    } catch (error) {
+      if (error.response?.status === 404) {
+        throw new NotFoundException('Producto no encontrado');
+      }
+      throw new HttpException(
+        'Error al obtener detalle del producto',
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
     }
-
-    return {
-      id: producto.id,
-      nombre: producto.nombre,
-      descripcion: producto.descripcion,
-      precio: producto.precio,
-      imagenPrincipal: producto.imagenPrincipal,
-      imagenes: producto.imagenes?.map(img => img.urlImagen) || [],
-      categoria: producto.categoria.nombre,
-      categoriaId: producto.categoriaId,
-      tiempoPreparacion: producto.tiempoPreparacion,
-      ingredientes: producto.ingredientes?.map(pi => ({
-        nombre: pi.ingrediente.nombre,
-        cantidad: pi.cantidad,
-        esAlergeno: pi.ingrediente.esAlergeno,
-      })) || [],
-      informacionNutricional: producto.informacionNutricional ? {
-        calorias: producto.informacionNutricional.calorias,
-        proteinas: producto.informacionNutricional.proteinas,
-        carbohidratos: producto.informacionNutricional.carbohidratos,
-        grasas: producto.informacionNutricional.grasas,
-        fibra: producto.informacionNutricional.fibra,
-        sodio: producto.informacionNutricional.sodio,
-        azucares: producto.informacionNutricional.azucares,
-        porcion: producto.informacionNutricional.porcion,
-      } : null,
-    };
   }
 }

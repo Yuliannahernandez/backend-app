@@ -1,19 +1,11 @@
 import { Injectable } from '@nestjs/common';
-import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
-import { Sucursal } from '../entities/sucursal.entity';
+import { DatabaseApiService } from '../common/services/database-api.service';
 
 @Injectable()
 export class SucursalesService {
-  constructor(
-    @InjectRepository(Sucursal)
-    private sucursalRepository: Repository<Sucursal>,
-  ) {}
+  constructor(private readonly dbApi: DatabaseApiService) {}
 
   async getSucursalesActivas() {
-    return this.sucursalRepository.find({
-      where: { activa: true },
-      order: { orden: 'ASC' },
-    });
+    return this.dbApi.findAllSucursales();
   }
 }

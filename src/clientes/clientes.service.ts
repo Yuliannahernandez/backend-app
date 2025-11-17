@@ -1,74 +1,137 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
-import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
-import { Cliente } from '../entities/cliente.entity';
-import { Usuario } from '../entities/usuario.entity';
+import { ConfigService } from '@nestjs/config';
+import axios, { AxiosInstance } from 'axios';
 
 @Injectable()
 export class ClientesService {
-  constructor(
-    @InjectRepository(Cliente)
-    private clienteRepository: Repository<Cliente>,
-    @InjectRepository(Usuario)
-    private usuarioRepository: Repository<Usuario>,
-  ) {}
+  private apiClient: AxiosInstance;
+
+  constructor(private configService: ConfigService) {
+    this.apiClient = axios.create({
+      baseURL: this.configService.get('PYTHON_API_URL') || 'http://localhost:8000',
+      timeout: 10000,
+      headers: {
+        'Content-Type': 'application/json',
+      },
+    });
+  }
 
   async getPerfil(usuarioId: number) {
-    const cliente = await this.clienteRepository.findOne({
-      where: { usuarioId },
-      relations: ['usuario'],
-    });
+    try {
+      
+      const response = await this.apiClient.get(`/usuarios/${usuarioId}`);
+      const usuario = response.data;
 
-    if (!cliente) {
-      throw new NotFoundException('Cliente no encontrado');
+      return {
+        id: usuario.id,
+        nombre: usuario.nombre,
+        apellido: usuario.apellido,
+        correo: usuario.correo,
+        telefono: usuario.telefono,
+        edad: usuario.edad,
+        fechaNacimiento: usuario.fechaNacimiento,
+        puntosLealtad: usuario.puntosLealtad || 0,
+        fotoPerfil: usuario.fotoPerfil,
+        idioma: usuario.idioma,
+      };
+    } catch (error) {
+      if (error.response?.status === 404) {
+        throw new NotFoundException('Cliente no encontrado');
+      }
+      throw error;
     }
-
-    return {
-      id: cliente.id,
-      nombre: cliente.nombre,
-      apellido: cliente.apellido,
-      correo: cliente.usuario?.correo,
-      telefono: cliente.telefono,
-      edad: cliente.edad,
-      fechaNacimiento: cliente.fechaNacimiento,
-      puntosLealtad: cliente.puntosLealtad || 0,
-      fotoPerfil: cliente.fotoPerfil,
-      idioma: cliente.idioma,
-    };
   }
 
   async actualizarPerfil(usuarioId: number, data: any) {
-    const cliente = await this.clienteRepository.findOne({
-      where: { usuarioId },
-    });
+    try {
+      
+      const updateData: any = {};
+      
+      if (data.nombre !== undefined) updateData.nombre = data.nombre;
+      if (data.apellido !== undefined) updateData.apellido = data.apellido;
+      if (data.telefono !== undefined) updateData.telefono = data.telefono;
+      if (data.edad !== undefined) updateData.edad = data.edad;
+      if (data.fechaNacimiento !== undefined) {
+        updateData.fechaNacimiento = data.fechaNacimiento;
+      }
 
-    if (!cliente) {
-      throw new NotFoundException('Cliente no encontrado');
+      
+      await this.apiClient.put(`/usuarios/${usuarioId}`, updateData);
+
+      // Retornar perfil actualizado
+      return this.getPerfil(usuarioId);
+    } catch (error) {
+      if (error.response?.status === 404) {
+        throw new NotFoundException('Cliente no encontrado');
+      }
+      throw error;
     }
-
-    // Actualizar campos
-    if (data.nombre !== undefined) cliente.nombre = data.nombre;
-    if (data.apellido !== undefined) cliente.apellido = data.apellido;
-    if (data.telefono !== undefined) cliente.telefono = data.telefono;
-    if (data.edad !== undefined) cliente.edad = data.edad;
-    if (data.fechaNacimiento !== undefined) {
-      cliente.fechaNacimiento = new Date(data.fechaNacimiento);
-    }
-
-    await this.clienteRepository.save(cliente);
-
-    return this.getPerfil(usuarioId);
   }
 
   async getClienteByUsuarioId(usuarioId: number) {
-    const cliente = await this.clienteRepository.findOne({
-      where: { usuarioId },
-    });
-
-    if (!cliente) {
-      throw new NotFoundException('Cliente no encontrado');
+    try {
+      
+      const response = await this.apiClient.get(`/usuarios/${usuarioId}`);
+      return response.data;
+    } catch (error) {
+      if (error.response?.status === 404) {
+        throw new NotFoundException('Cliente no encontrado');
+      }
+      throw error;
     }
+  }
 
-    return cliente;
+ 
+
+  async getClienteByEmail(correo: string) {
+    try {
+      const response = await this.apiClient.get(`/usuarios/email/${correo}`);
+      return response.data;
+    } catch (error) {
+      if (error.response?.status === 404) {
+        throw new NotFoundException('Cliente no encontrado');
+      }
+      throw error;
+    }
+  }
+
+  async getClienteByPhone(telefono: string) {
+    try {
+      const response = await this.apiClient.get(`/usuarios/by-phone/${telefono}`);
+      return response.data;
+    } catch (error) {
+      if (error.response?.status === 404) {
+        throw new NotFoundException('Cliente no encontrado');
+      }
+      throw error;
+    }
+  }
+
+  async actualizarUltimoAcceso(usuarioId: number) {
+    try {
+      await this.apiClient.put(`/usuarios/${usuarioId}/ultimo-acceso`);
+    } catch (error) {
+      console.error('Error actualizando último acceso:', error);
+    }
+  }
+
+  async getPuntosLealtad(usuarioId: number) {
+    try {
+      const response = await this.apiClient.get(`/lealtad/usuario/${usuarioId}`);
+      return response.data;
+    } catch (error) {
+      return { usuarioId, puntos: 0 };
+    }
+  }
+
+  async actualizarPuntos(usuarioId: number, puntos: number) {
+    try {
+      const response = await this.apiClient.put(
+        `/lealtad/usuario/${usuarioId}/puntos?puntos=${puntos}`
+      );
+      return response.data;
+    } catch (error) {
+      throw error;
+    }
   }
 }

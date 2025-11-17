@@ -1,6 +1,6 @@
 import { IsString, IsInt, IsOptional, Min, Max, IsEmail, IsDateString, IsBoolean, IsDecimal, IsArray, IsNumber } from 'class-validator';
 
-// DTO para actualizar perfil del cliente
+
 export class UpdateProfileDto {
   @IsOptional()
   @IsString()
@@ -22,50 +22,51 @@ export class UpdateProfileDto {
 
   @IsOptional()
   @IsDateString()
-  fechaNacimiento?: string;
+  fecha_nacimiento?: string;
+
+  @IsOptional()
+  @IsInt()
+  localidad_id?: number; 
 
   @IsOptional()
   @IsString()
   idioma?: string;
 }
 
-// DTO para crear/actualizar dirección
 export class CreateDireccionDto {
-  @IsOptional()
   @IsString()
-  alias?: string;
+  alias: string;
 
   @IsString()
-  direccionCompleta: string;
+  direccion_completa: string;  
 
   @IsString()
-  ciudad: string;
+  ciudad: string;  
 
   @IsString()
   provincia: string;
 
   @IsOptional()
   @IsString()
-  codigoPostal?: string;
+  codigo_postal?: string;  
 
   @IsOptional()
   @IsNumber()
-  latitud?: number;
+  latitud?: number;  
 
   @IsOptional()
   @IsNumber()
-  longitud?: number;
+  longitud?: number;  
 
   @IsOptional()
   @IsString()
-  referencia?: string;
+  referencia?: string; 
 
   @IsOptional()
   @IsBoolean()
-  esPrincipal?: boolean;
+  es_principal?: boolean;
 }
 
-// DTO para crear/actualizar método de pago
 export class CreateMetodoPagoDto {
   @IsString()
   tipo: 'tarjeta_credito' | 'tarjeta_debito' | 'efectivo' | 'transferencia';
@@ -76,7 +77,7 @@ export class CreateMetodoPagoDto {
 
   @IsOptional()
   @IsString()
-  ultimosDigitos?: string;
+  ultimos_digitos?: string; 
 
   @IsOptional()
   @IsString()
@@ -84,24 +85,22 @@ export class CreateMetodoPagoDto {
 
   @IsOptional()
   @IsString()
-  nombreTitular?: string;
+  nombre_titular?: string;  
 
   @IsOptional()
   @IsDateString()
-  fechaExpiracion?: string;
+  fecha_expiracion?: string;  
 
   @IsOptional()
   @IsBoolean()
-  esPrincipal?: boolean;
+  es_principal?: boolean;  
 
   @IsOptional()
   @IsString()
-  tokenPago?: string;
+  token_pago?: string;  
 }
-
-// DTO para agregar condición de salud
 export class AddCondicionSaludDto {
   @IsArray()
   @IsNumber({}, { each: true })
-  condicionIds: number[];
+  condicion_ids: number[];  
 }
