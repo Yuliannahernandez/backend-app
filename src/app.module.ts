@@ -18,19 +18,22 @@ import { AuditoriaModule } from './auditoria/auditoria.module';
 import { AuditoriaInterceptor } from './common/interceptors/auditoria.interceptor'; 
 import { LocalidadesModule } from './localidades/localidades.module';
 import { TipoCambioModule } from './tipo-cambio/tipo-cambio.module';
-
+import { SinpeModule } from './sinpe/sinpe.module'; 
+import { RecomendacionesModule } from './recomendaciones/recomendaciones.module';
+import { FavoritosModule } from './favoritos/favoritos.module';
+import { ReservacionesModule } from './reservaciones/reservaciones.module';
+import { TarjetasModule } from './tarjetas/tarjetas.module';
+import { TseModule } from './tse/tse.module';
 @Module({ 
+
   imports: [
-    // Configuración de variables de entorno
+   
     ConfigModule.forRoot({
       isGlobal: true,
     }),
     
     CommonModule,
-   
-    
-    
-    // Módulos de la aplicación
+
     AuthModule,
     ProfileModule,
     ProductosModule,
@@ -46,9 +49,15 @@ import { TipoCambioModule } from './tipo-cambio/tipo-cambio.module';
     AuditoriaModule,
     LocalidadesModule,
     TipoCambioModule,
+    SinpeModule,
+    RecomendacionesModule,
+    FavoritosModule,
+    ReservacionesModule,
+    TarjetasModule,
+    TseModule,
   ],
   providers: [
-    // Interceptor de auditoría global
+
     {
       provide: APP_INTERCEPTOR,
       useClass: AuditoriaInterceptor,

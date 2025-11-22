@@ -1,4 +1,3 @@
-// tipo-cambio/tipo-cambio.controller.ts
 
 import { 
   Controller, 
@@ -16,7 +15,7 @@ export class TipoCambioController {
 
   @Get('actual')
   async getTipoCambioActual() {
-    console.log('💱 NestJS: Obteniendo tipo de cambio actual');
+    console.log(' NestJS: Obteniendo tipo de cambio actual');
     return this.tipoCambioService.getTipoCambioActual();
   }
 
@@ -33,7 +32,7 @@ export class TipoCambioController {
       throw new Error('El monto debe ser un número válido');
     }
 
-    console.log(`💱 NestJS: Convirtiendo ${montoNumero} ${de || 'USD'} a ${a || 'CRC'}`);
+    console.log(` NestJS: Convirtiendo ${montoNumero} ${de || 'USD'} a ${a || 'CRC'}`);
     
     return this.tipoCambioService.convertirMoneda(
       montoNumero,

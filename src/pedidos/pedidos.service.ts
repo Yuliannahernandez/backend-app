@@ -19,6 +19,7 @@ export class PedidosService {
       },
     });
   }
+  
 
    async actualizarSucursal(pedidoId: number, sucursalId: number) {
     try {
@@ -39,42 +40,49 @@ export class PedidosService {
     }
   }
 
-  async crearPedidoDesdeCarrito(usuarioId: number) {
-    console.log('Creando pedido desde carrito para usuario:', usuarioId);
+  async crearPedidoDesdeCarrito(payload: any) {
+    console.log(' Creando pedido desde carrito con payload:', payload);
 
     try {
-      const response = await this.apiClient.post('/pedidos/crear-desde-carrito', {
-        usuario_id: usuarioId,
-      });
+      // Enviar el payload completo tal como viene del controlador
+      const response = await this.apiClient.post('/pedidos/crear-desde-carrito', payload);
 
       const pedido = response.data;
-      console.log('Pedido creado con ID:', pedido.id);
+      console.log(' Pedido creado con ID:', pedido.id);
 
-      // AGREGAR PUNTOS DE LEALTAD
-      try {
-        const puntosGanados = await this.lealtadService.agregarPuntosPorCompra(
-          usuarioId,
-          pedido.total,
-          pedido.id
-        );
-        console.log(` Puntos agregados: ${puntosGanados}`);
-      } catch (error) {
-        console.error(' Error agregando puntos:', error);
-        // No lanzamos el error para que el pedido se complete aunque falle los puntos
+      // AGREGAR PUNTOS DE LEALTAD solo si hay usuario_id
+      const usuarioId = payload.usuario_id;
+      if (usuarioId && pedido.total) {
+        try {
+          const puntosGanados = await this.lealtadService.agregarPuntosPorCompra(
+            usuarioId,
+            pedido.total,
+            pedido.id
+          );
+          console.log(`Puntos agregados: ${puntosGanados}`);
+        } catch (error) {
+          console.error(' Error agregando puntos:', error);
+          // No lanzamos el error para que el pedido se complete aunque fallen los puntos
+        }
       }
 
       // Retornar el pedido completo
       return this.getPedido(usuarioId, pedido.id);
     } catch (error) {
+      console.error(' Error en crearPedidoDesdeCarrito:', error.response?.data || error.message);
       if (error.response?.status === 404) {
         throw new NotFoundException(error.response.data.detail || 'Recurso no encontrado');
       }
       if (error.response?.status === 400) {
         throw new BadRequestException(error.response.data.detail || 'Error creando pedido');
       }
+      if (error.response?.status === 422) {
+        throw new BadRequestException(error.response.data.detail || 'Datos inválidos');
+      }
       throw error;
     }
   }
+
 
 async getPedido(usuarioId: number, pedidoId: number) {
   try {

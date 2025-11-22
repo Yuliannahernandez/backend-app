@@ -10,13 +10,13 @@ async function bootstrap() {
     const app = await NestFactory.create<NestExpressApplication>(AppModule);
   
      app.useStaticAssets(join(__dirname, '..', 'uploads'), {
-    prefix: '/uploads/', // la ruta pública
+    prefix: '/uploads/', 
   });
 
    
-  // Habilitar CORS para el frontend
+
   app.enableCors({
-  origin: ['http://localhost:5173', 'http://192.168.1.10:5173'],
+  origin: ['http://localhost:5173', 'http://192.168.100.182:5173'], 
   credentials: true,
 });
 

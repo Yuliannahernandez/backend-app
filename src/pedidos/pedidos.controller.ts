@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Put, Param, UseGuards, Request, ParseIntPipe, Query } from '@nestjs/common';
+import { Controller, Get, Post, Put, Param, UseGuards, Request, ParseIntPipe, Query,Body } from '@nestjs/common';
 import { PedidosService } from './pedidos.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 
@@ -6,6 +6,26 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 @UseGuards(JwtAuthGuard)
 export class PedidosController {
   constructor(private readonly pedidosService: PedidosService) {}
+
+   // ← NUEVO ENDPOINT PARA CREAR DESDE CARRITO
+  @Post('crear-desde-carrito')
+  async crearPedidoDesdeCarrito(
+    @Request() req,
+    @Body() body: any
+  ) {
+    const usuarioId = req.user.sub || req.user.userId;
+    
+    console.log('📦 Creando pedido desde carrito para usuario:', usuarioId);
+    console.log('📦 Body recibido:', body);
+    
+    // Agregar usuario_id al body
+    const payload = {
+      usuario_id: usuarioId,
+      ...body
+    };
+    
+    return this.pedidosService.crearPedidoDesdeCarrito(payload);
+  }
 
  
   @Put(':pedidoId')

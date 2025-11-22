@@ -1,4 +1,3 @@
-// tipo-cambio/tipo-cambio.service.ts
 
 import { Injectable, HttpException, HttpStatus } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
@@ -20,19 +19,18 @@ export class TipoCambioService {
       const response = await this.apiClient.get('/tipo-cambio/actual');
       return response.data;
     } catch (error) {
-      console.error('❌ Error obteniendo tipo de cambio:', error);
-      // Intentar con caché
+      console.error('Error obteniendo tipo de cambio:', error);
+
       return this.getTipoCambioCache();
     }
   }
 
-  // ← AGREGAR ESTE MÉTODO
   async getTipoCambioCache() {
     try {
       const response = await this.apiClient.get('/tipo-cambio/cache');
       return response.data;
     } catch (error) {
-      console.error('❌ Error obteniendo caché:', error);
+      console.error(' Error obteniendo caché:', error);
       throw new HttpException(
         'Error al obtener tipo de cambio',
         HttpStatus.INTERNAL_SERVER_ERROR
@@ -47,7 +45,7 @@ export class TipoCambioService {
       });
       return response.data;
     } catch (error) {
-      console.error('❌ Error convirtiendo moneda:', error);
+      console.error('Error convirtiendo moneda:', error);
       throw new HttpException(
         'Error al convertir moneda',
         HttpStatus.INTERNAL_SERVER_ERROR

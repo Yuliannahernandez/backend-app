@@ -1,4 +1,3 @@
-// tipo-cambio/tipo-cambio.module.ts
 
 import { Module } from '@nestjs/common';
 import { TipoCambioController } from './tipo-cambio.controller';
