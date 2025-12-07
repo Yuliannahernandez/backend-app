@@ -33,7 +33,7 @@ async function bootstrap() {
   app.setGlobalPrefix('api');
   
   // Puerto dinámico para Render
-  const port = process.env.PORT || 3000;
+  const port =parseInt( process.env.PORT, 10) || 3000;
   await app.listen(port, '0.0.0.0');
   console.log(` Servidor NestJS corriendo en http://0.0.0.0:${port}`);
   console.log(` Entorno: ${process.env.NODE_ENV}`);
