@@ -20,6 +20,7 @@ const allowedOrigins = process.env.ALLOWED_ORIGINS
       'http://192.168.100.182:5173',
       'https://reelish-app.vercel.app',       
       'https://www.reelish-app.vercel.app' ,
+      'https://reelishapprestaurante.vercel.app',
       'https://reelish-nu.vercel.app'   
     ];
 
