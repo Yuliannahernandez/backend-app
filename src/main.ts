@@ -13,14 +13,20 @@ async function bootstrap() {
   });
 
   // CORS - Actualizado para producción
-  const allowedOrigins = process.env.ALLOWED_ORIGINS 
-    ? process.env.ALLOWED_ORIGINS.split(',')
-    : ['http://localhost:5173', 'http://192.168.100.182:5173'];
-  
-  app.enableCors({
-    origin: allowedOrigins,
-    credentials: true,
-  });
+const allowedOrigins = process.env.ALLOWED_ORIGINS 
+  ? process.env.ALLOWED_ORIGINS.split(',')
+  : [
+      'http://localhost:5173',
+      'http://192.168.100.182:5173',
+      'https://reelish-app.vercel.app',       
+      'https://www.reelish-app.vercel.app'    
+    ];
+
+app.enableCors({
+  origin: allowedOrigins,
+  credentials: true,
+});
+
   
   // Validación global de DTOs
   app.useGlobalPipes(new ValidationPipe({
