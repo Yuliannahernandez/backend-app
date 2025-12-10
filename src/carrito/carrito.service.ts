@@ -9,7 +9,7 @@ export class CarritoService {
   constructor(private configService: ConfigService) {
     this.apiClient = axios.create({
       baseURL: this.configService.get('PYTHON_API_URL') || 'http://localhost:8000',
-      timeout: 10000,
+      timeout: 30000,
       headers: {
         'Content-Type': 'application/json',
       },
